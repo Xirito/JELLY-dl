@@ -1,0 +1,33 @@
+services:
+  jellyfin:
+    image: jellyfin/jellyfin:latest
+    container_name: jellyfin
+    restart: unless-stopped
+    ports:
+      - "8096:8096"
+    volumes:
+      - ./jellyfin/config:/config
+      - ./jellyfin/cache:/cache
+      - /mnt/FA_1/media:/media
+    environment:
+      - JELLYFIN_PublishedServerUrl=http://192.168.68.4:8096
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  downloader:
+    build: ./downloader
+    container_name: downloader
+    restart: unless-stopped
+    ports:
+      - "8790:8790"
+    volumes:
+      - /mnt/FA_1/media:/media
+      - /mnt/FA_1/media/downloads:/downloads
+    environment:
+      - MEDIA_TARGETS=jellyfin=/media
+      - DOWNLOAD_ROOT=/downloads

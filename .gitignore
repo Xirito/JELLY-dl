@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.venv/
+jellyfin/config/
+jellyfin/cache/
+*.log
