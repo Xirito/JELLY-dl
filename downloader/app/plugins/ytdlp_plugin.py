@@ -166,7 +166,12 @@ class YtdlpDownloader:
             "restrictfilenames": False,
         }
         if format_selector.mode == "best_audio":
+            # Music libraries don't index .webm — extract to a native audio
+            # container (.opus/.m4a) instead of leaving bestaudio in webm.
             opts.pop("merge_output_format", None)
+            opts["postprocessors"] = [
+                {"key": "FFmpegExtractAudio", "preferredcodec": "best"}
+            ]
 
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
