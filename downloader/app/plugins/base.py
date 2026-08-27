@@ -10,6 +10,7 @@ from typing import Callable, Protocol, runtime_checkable
 
 from ..models import (
     DownloaderCapabilities,
+    DownloadOptions,
     DownloadProgress,
     DownloadResult,
     FormatOption,
@@ -35,4 +36,5 @@ class Downloader(Protocol):
         format_selector: FormatSelector,
         destination: Path,
         on_progress: Callable[[DownloadProgress], None],
+        options: DownloadOptions | None = None,
     ) -> DownloadResult: ...

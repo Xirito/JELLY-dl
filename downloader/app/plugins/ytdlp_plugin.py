@@ -20,6 +20,7 @@ import yt_dlp
 from ..config import DOWNLOAD_ROOT
 from ..models import (
     DownloaderCapabilities,
+    DownloadOptions,
     DownloadProgress,
     DownloadResult,
     FormatOption,
@@ -44,6 +45,7 @@ class YtdlpDownloader:
         supports_search=True,           # via ytsearch: pseudo-URLs
         supports_format_listing=True,
         supports_manual_format_select=True,
+        supports_metadata_embed=True,   # via FFmpegMetadata postprocessor
     )
 
     def __init__(self, postprocessor: FfmpegPostProcessor | None = None,
@@ -121,6 +123,7 @@ class YtdlpDownloader:
         format_selector: FormatSelector,
         destination: Path,
         on_progress: Callable[[DownloadProgress], None],
+        options: DownloadOptions | None = None,
     ) -> DownloadResult:
         destination.mkdir(parents=True, exist_ok=True)
         final_path: dict[str, str] = {}
@@ -167,13 +170,19 @@ class YtdlpDownloader:
             "noplaylist": True,
             "restrictfilenames": False,
         }
+        postprocessors: list[dict] = []
         if format_selector.mode == "best_audio":
             # Music libraries don't index .webm — extract to a native audio
             # container (.opus/.m4a) instead of leaving bestaudio in webm.
             opts.pop("merge_output_format", None)
-            opts["postprocessors"] = [
+            postprocessors.append(
                 {"key": "FFmpegExtractAudio", "preferredcodec": "best"}
-            ]
+            )
+        if options and options.embed_metadata:
+            # Write title/artist/date/chapters tags into the output file.
+            postprocessors.append({"key": "FFmpegMetadata"})
+        if postprocessors:
+            opts["postprocessors"] = postprocessors
 
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:

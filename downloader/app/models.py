@@ -12,6 +12,7 @@ class DownloaderCapabilities(BaseModel):
     supports_search: bool
     supports_format_listing: bool
     supports_manual_format_select: bool
+    supports_metadata_embed: bool = False
 
 
 class DownloaderInfo(BaseModel):
@@ -68,11 +69,16 @@ class DownloadResult(BaseModel):
     error: Optional[str] = None
 
 
+class DownloadOptions(BaseModel):
+    embed_metadata: bool = False
+
+
 class DownloadRequest(BaseModel):
     downloader_id: str
     source: str
     format_selector: FormatSelector
     destination_path: str = ""   # raw user path, may start with $token$
+    options: DownloadOptions = DownloadOptions()
 
 
 class JobInfo(BaseModel):

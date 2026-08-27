@@ -77,7 +77,8 @@ class DownloadService:
                 if j:
                     j.title = title
 
-        result = dl.download(req.source, req.format_selector, dest, on_progress)
+        result = dl.download(req.source, req.format_selector, dest, on_progress,
+                             req.options)
 
         with self._lock:
             j = self._jobs.get(job_id)

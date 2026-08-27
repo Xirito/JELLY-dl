@@ -95,6 +95,12 @@
       <input type="text" id="dest" placeholder="$jellyfin$/shows/…  or  podcasts/…" autocomplete="off">
       <div class="sugg-list hidden" id="suggList"></div>
     </div>
+    <div id="metaRow" style="margin-top:10px">
+      <label style="display:flex;gap:8px;align-items:center;text-transform:none;
+                    letter-spacing:0;font-size:14px;color:var(--text);cursor:pointer">
+        <input type="checkbox" id="embedMeta"> Embed metadata (title, artist, date, chapters)
+      </label>
+    </div>
     <div style="margin-top:14px;display:flex;gap:10px;align-items:center">
       <button class="primary" id="btnGo">Download</button>
       <span class="muted" id="msg"></span>
@@ -132,6 +138,7 @@ function onDownloaderChange(){
   caps = downloaders.find(d=>d.id===$("dl").value).capabilities;
   $("searchBox").classList.toggle("hidden", !caps.supports_search);
   $("btnManual").classList.toggle("hidden", !caps.supports_manual_format_select);
+  $("metaRow").classList.toggle("hidden", !caps.supports_metadata_embed);
 }
 $("dl").onchange = onDownloaderChange;
 
@@ -212,7 +219,8 @@ $("btnGo").onclick = async () => {
       body: JSON.stringify({
         downloader_id: $("dl").value, source: src,
         format_selector: {mode, format_id: mode==="manual"?manualId:null},
-        destination_path: $("dest").value.trim()
+        destination_path: $("dest").value.trim(),
+        options: {embed_metadata: $("embedMeta").checked}
       })});
     setMsg("queued ✓"); pollJobs();
   }catch(e){ setMsg(e.message, true) }
