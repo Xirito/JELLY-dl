@@ -3,3 +3,5 @@ uvicorn[standard]
 pydantic>=2
 # yt-dlp deliberately unpinned — sites change frequently, pinning causes format errors
 yt-dlp
+# cover-art embedding for opus/ogg/flac/m4a (EmbedThumbnail postprocessor)
+mutagen

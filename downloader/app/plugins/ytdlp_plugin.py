@@ -181,6 +181,13 @@ class YtdlpDownloader:
         if options and options.embed_metadata:
             # Write title/artist/date/chapters tags into the output file.
             postprocessors.append({"key": "FFmpegMetadata"})
+        if format_selector.mode == "best_audio":
+            # Auto-embed the thumbnail as cover art on audio downloads.
+            opts["writethumbnail"] = True
+            postprocessors.insert(0, {"key": "FFmpegThumbnailsConvertor",
+                                      "format": "png", "when": "before_dl"})
+            postprocessors.append({"key": "EmbedThumbnail",
+                                   "already_have_thumbnail": False})
         if postprocessors:
             opts["postprocessors"] = postprocessors
 
