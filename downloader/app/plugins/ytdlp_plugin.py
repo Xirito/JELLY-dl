@@ -128,8 +128,10 @@ class YtdlpDownloader:
         def hook(d: dict):
             st = d.get("status")
             if st == "downloading":
+                # total_bytes_estimate can be a float — DTO wants ints
                 total = d.get("total_bytes") or d.get("total_bytes_estimate")
-                done = d.get("downloaded_bytes") or 0
+                total = int(total) if total else None
+                done = int(d.get("downloaded_bytes") or 0)
                 on_progress(DownloadProgress(
                     status="downloading",
                     downloaded_bytes=done,
