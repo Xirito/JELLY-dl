@@ -11,8 +11,10 @@ from ..models import (
     JobInfo,
     JobStatus,
 )
+from ..config import MEDIA_SERVER_TARGETS
 from ..registry import DownloaderRegistry
-from .path_resolver import PathResolver
+from .notifier import build_notifiers
+from .path_resolver import PathResolver, split_token
 
 _MAX_JOBS_KEPT = 200
 
@@ -23,6 +25,7 @@ class DownloadService:
         self.resolver = resolver or PathResolver()
         self._jobs: OrderedDict[str, JobInfo] = OrderedDict()
         self._lock = threading.Lock()
+        self.notifiers = build_notifiers(list(MEDIA_SERVER_TARGETS))
 
     # -- public ------------------------------------------------------------
     def start(self, req: DownloadRequest) -> JobInfo:
@@ -81,3 +84,14 @@ class DownloadService:
             if j:
                 j.result = result
                 j.status = JobStatus.error if result.error else JobStatus.finished
+
+        # Best-effort: tell the media server to rescan when a download landed
+        # under one of its $token$ paths. Never fails the job.
+        if not result.error:
+            token, _ = split_token(req.destination_path or "")
+            notifier = self.notifiers.get(token) if token else None
+            if notifier:
+                try:
+                    notifier.refresh()
+                except Exception:
+                    pass

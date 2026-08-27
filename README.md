@@ -27,6 +27,15 @@ implement `Downloader` in `app/plugins/`, register it in `app/registry.py`, done
 - `podcasts/y` → resolved under the downloader's own storage root (`/downloads`).
 - Tokens come from `MEDIA_TARGETS` env (`token=path,token=path`); add `$plex$` etc. by config only.
 
+## Instant library refresh
+
+After a download lands under a `$token$` path, the downloader pings that media
+server to rescan (best-effort). Config per token, via env:
+`NOTIFY_JELLYFIN_URL=http://jellyfin:8096` (set in compose) and
+`NOTIFY_JELLYFIN_APIKEY` — supplied through `JELLYFIN_API_KEY` in a `.env`
+file next to `docker-compose.yml` (gitignored). Create the key in Jellyfin:
+Dashboard → API Keys → “+”.
+
 ## Operate
 
 ```sh

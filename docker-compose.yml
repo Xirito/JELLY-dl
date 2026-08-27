@@ -31,3 +31,6 @@ services:
     environment:
       - MEDIA_TARGETS=jellyfin=/media
       - DOWNLOAD_ROOT=/downloads
+      # library-refresh ping after each finished download landing under $jellyfin$
+      - NOTIFY_JELLYFIN_URL=http://jellyfin:8096
+      - NOTIFY_JELLYFIN_APIKEY=${JELLYFIN_API_KEY:-}
