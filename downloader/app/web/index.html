@@ -53,7 +53,9 @@
   .bar{height:6px;border-radius:4px;background:var(--line);margin-top:8px;overflow:hidden}
   .bar i{display:block;height:100%;background:var(--accent);width:0%;transition:width .4s}
   .st-finished{color:var(--ok)} .st-error{color:var(--err)} .st-running,.st-queued{color:var(--accent)}
+  .st-cancelled{color:var(--muted)}
   .err{color:var(--err);font-size:13px;margin-top:6px;word-break:break-all}
+  .job .btn-cancel{padding:3px 10px;font-size:12px;border-radius:6px;flex:0 0 auto}
 </style>
 </head>
 <body>
@@ -268,6 +270,16 @@ $("btnGo").onclick = async () => {
   $("btnGo").disabled = false;
 };
 
+// Delegated once — job cards are replaced wholesale on every poll, so a
+// listener bound to individual buttons would go stale.
+$("jobs").addEventListener("click", async e => {
+  const btn = e.target.closest(".btn-cancel");
+  if(!btn) return;
+  btn.disabled = true; btn.textContent = "cancelling…";
+  try{ await api(`/downloads/${btn.dataset.id}/cancel`, {method:"POST"}); pollJobs() }
+  catch(err){ btn.disabled = false; btn.textContent = "Cancel" }
+});
+
 async function pollJobs(){
   try{
     const jobs = await api("/downloads");
@@ -277,14 +289,23 @@ async function pollJobs(){
       const pct = p.percent!=null ? p.percent : (j.status==="finished"?100:0);
       const speed = p.speed_bps ? fmtSize(p.speed_bps)+"/s" : "";
       const eta = p.eta_s ? "eta "+fmtDur(p.eta_s) : "";
+      const size = p.downloaded_bytes
+        ? fmtSize(p.downloaded_bytes) + (p.total_bytes ? " / " + fmtSize(p.total_bytes) : "")
+        : "";
+      const cancellable = j.status === "queued" || j.status === "running";
+      const cancelling = p.status === "cancelling";
+      const statusLabel = cancelling ? "cancelling…" : j.status;
       return `<div class="job">
         <div class="top">
           <span class="name">${esc(j.title||p.filename||j.source)}</span>
-          <span class="st-${j.status}">${j.status}</span>
+          <span style="display:flex;gap:8px;align-items:center;flex:0 0 auto">
+            <span class="st-${j.status}">${statusLabel}</span>
+            ${cancellable ? `<button class="btn-cancel" data-id="${j.id}" ${cancelling?"disabled":""}>${cancelling?"cancelling…":"Cancel"}</button>` : ""}
+          </span>
         </div>
-        <div class="muted" style="font-size:12px;margin-top:2px">→ ${esc(j.destination)} ${speed} ${eta}</div>
+        <div class="muted" style="font-size:12px;margin-top:2px">→ ${esc(j.destination)}${size?" · "+size:""}${speed?" · "+speed:""}${eta?" · "+eta:""}</div>
         <div class="bar"><i style="width:${pct}%${j.status==='error'?';background:var(--err)':''}"></i></div>
-        ${j.result&&j.result.error?`<div class="err">${esc(j.result.error)}</div>`:""}
+        ${j.result&&j.result.error&&j.status!=='cancelled'?`<div class="err">${esc(j.result.error)}</div>`:""}
       </div>`;
     }).join("");
   }catch(e){}

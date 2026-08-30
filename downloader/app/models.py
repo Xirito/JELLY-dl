@@ -65,6 +65,7 @@ class JobStatus(str, Enum):
     running = "running"
     finished = "finished"
     error = "error"
+    cancelled = "cancelled"
 
 
 class DownloadProgress(BaseModel):

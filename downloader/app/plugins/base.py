@@ -40,4 +40,9 @@ class Downloader(Protocol):
         destination: Path,
         on_progress: Callable[[DownloadProgress], None],
         options: DownloadOptions | None = None,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> DownloadResult: ...
+    # `should_cancel`: polled from inside the download loop (progress hooks
+    # are a natural place) -- when it returns True the implementation should
+    # stop as soon as practical and return. The service, not the plugin,
+    # decides the resulting job status; plugins just need to stop early.

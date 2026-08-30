@@ -127,11 +127,17 @@ class YtdlpDownloader:
         destination: Path,
         on_progress: Callable[[DownloadProgress], None],
         options: DownloadOptions | None = None,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> DownloadResult:
         destination.mkdir(parents=True, exist_ok=True)
         final_path: dict[str, str] = {}
 
         def hook(d: dict):
+            if should_cancel and should_cancel():
+                # Recognized specially by yt-dlp: aborts the download loop
+                # (and any remaining fragments) without treating it as a
+                # generic extractor failure.
+                raise yt_dlp.utils.DownloadCancelled("cancelled by user")
             st = d.get("status")
             if st == "downloading":
                 # total_bytes_estimate can be a float — DTO wants ints
@@ -205,6 +211,9 @@ class YtdlpDownloader:
                                          filename=Path(final_path.get("p", "")).name or None,
                                          percent=100.0))
             return DownloadResult(filepath=final_path.get("p"))
+        except yt_dlp.utils.DownloadCancelled:
+            on_progress(DownloadProgress(status="cancelled"))
+            return DownloadResult(error="cancelled by user")
         except Exception as e:  # surfaced to the job store
             on_progress(DownloadProgress(status="error"))
             return DownloadResult(error=str(e)[:2000])

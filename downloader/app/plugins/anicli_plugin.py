@@ -300,8 +300,11 @@ class AniCliDownloader:
         destination: Path,
         on_progress: Callable[[DownloadProgress], None],
         options: DownloadOptions | None = None,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> DownloadResult:
         try:
+            if should_cancel and should_cancel():
+                return DownloadResult(error="cancelled by user")
             anime_id, ep_no = self._split_leaf(source)
             lang = "eng" if (options and options.dub) else "jpn"
             ep_id = self._resolve_episode_id(anime_id, ep_no)
@@ -326,6 +329,8 @@ class AniCliDownloader:
         import yt_dlp  # local import: only this method needs it
 
         def hook(d: dict):
+            if should_cancel and should_cancel():
+                raise yt_dlp.utils.DownloadCancelled("cancelled by user")
             st = d.get("status")
             if st == "downloading":
                 total = d.get("total_bytes") or d.get("total_bytes_estimate")
@@ -377,6 +382,9 @@ class AniCliDownloader:
                                          filename=Path(final_path.get("p", "")).name or None,
                                          percent=100.0))
             return DownloadResult(filepath=final_path.get("p") or None)
+        except yt_dlp.utils.DownloadCancelled:
+            on_progress(DownloadProgress(status="cancelled"))
+            return DownloadResult(error="cancelled by user")
         except Exception as e:
             on_progress(DownloadProgress(status="error"))
             return DownloadResult(error=str(e)[:2000])
