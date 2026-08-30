@@ -26,7 +26,10 @@ class Downloader(Protocol):
     capabilities: DownloaderCapabilities
     default_download_root: Path
 
-    def search(self, query: str) -> list[SearchResult]: ...
+    def search(self, query: str, parent: str | None = None) -> list[SearchResult]: ...
+    # `parent`: when set, `query` may be ignored — it means "list the items
+    # inside this container" (see SearchResult.is_container). Backends that
+    # never return containers can ignore the parameter entirely.
 
     def list_formats(self, source: str) -> list[FormatOption]: ...
 

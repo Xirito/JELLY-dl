@@ -1,6 +1,7 @@
 """DownloaderRegistry — id -> Downloader instance map."""
 from __future__ import annotations
 
+from .plugins.anicli_plugin import AniCliDownloader
 from .plugins.base import Downloader
 from .plugins.ytdlp_plugin import YtdlpDownloader
 
@@ -25,5 +26,5 @@ class DownloaderRegistry:
 def build_default_registry() -> DownloaderRegistry:
     reg = DownloaderRegistry()
     reg.register(YtdlpDownloader())
-    # future: reg.register(AniCliDownloader())
+    reg.register(AniCliDownloader())
     return reg

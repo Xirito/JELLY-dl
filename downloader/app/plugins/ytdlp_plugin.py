@@ -54,7 +54,10 @@ class YtdlpDownloader:
         self.default_download_root = download_root or DOWNLOAD_ROOT
 
     # -- search ------------------------------------------------------------
-    def search(self, query: str) -> list[SearchResult]:
+    def search(self, query: str, parent: str | None = None) -> list[SearchResult]:
+        # yt-dlp results are always leaves; there's no container/drill-down
+        # concept here, so `parent` is accepted for Protocol conformance
+        # but has nothing to do.
         opts = {"quiet": True, "no_warnings": True, "extract_flat": True}
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(f"ytsearch10:{query}", download=False)

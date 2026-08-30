@@ -35,12 +35,14 @@ def downloaders():
 
 
 @app.get("/downloaders/{downloader_id}/search")
-def search(downloader_id: str, q: str = Query(min_length=1)):
+def search(downloader_id: str, q: str = Query(""), parent: str | None = Query(None)):
     d = _get_downloader(downloader_id)
     if not d.capabilities.supports_search:
         raise HTTPException(400, f"{downloader_id} does not support search")
+    if not parent and not q:
+        raise HTTPException(422, "q is required")
     try:
-        return d.search(q)
+        return d.search(q, parent)
     except Exception as e:
         raise HTTPException(502, f"search failed: {e}")
 

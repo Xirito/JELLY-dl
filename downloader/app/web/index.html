@@ -101,6 +101,12 @@
         <input type="checkbox" id="embedMeta"> Embed metadata (title, artist, date, chapters)
       </label>
     </div>
+    <div id="dubRow" style="margin-top:10px" class="hidden">
+      <label style="display:flex;gap:8px;align-items:center;text-transform:none;
+                    letter-spacing:0;font-size:14px;color:var(--text);cursor:pointer">
+        <input type="checkbox" id="dubToggle"> Dubbed (English audio) — default is subbed
+      </label>
+    </div>
     <div style="margin-top:14px;display:flex;gap:10px;align-items:center">
       <button class="primary" id="btnGo">Download</button>
       <span class="muted" id="msg"></span>
@@ -139,6 +145,24 @@ function onDownloaderChange(){
   $("searchBox").classList.toggle("hidden", !caps.supports_search);
   $("btnManual").classList.toggle("hidden", !caps.supports_manual_format_select);
   $("metaRow").classList.toggle("hidden", !caps.supports_metadata_embed);
+  $("dubRow").classList.toggle("hidden", !caps.supports_dub_toggle);
+
+  // Which preset mode buttons make sense varies by backend (e.g. ani-cli
+  // has no separate audio-only/video-only stream to offer).
+  const avail = caps.available_modes || ["best_video_audio","best_audio","best_video_only","manual"];
+  document.querySelectorAll("#presets button").forEach(b=>{
+    b.classList.toggle("hidden", !avail.includes(b.dataset.mode));
+  });
+  if(!avail.includes(mode)){
+    mode = avail[0];
+    document.querySelectorAll("#presets button").forEach(b=>b.classList.toggle("on", b.dataset.mode===mode));
+    if(mode!=="manual"){ $("formats").classList.add("hidden"); $("fmtHint").textContent="" }
+  }
+
+  // Search results/source and any picked manual format are backend-specific
+  // tokens — stale ones from the previous backend can't be reused.
+  $("results").classList.add("hidden"); $("results").innerHTML = "";
+  $("src").value = ""; manualId = null;
 }
 $("dl").onchange = onDownloaderChange;
 
@@ -147,19 +171,36 @@ $("btnSearch").onclick = async () => {
   $("btnSearch").disabled = true; setMsg("searching…");
   try{
     const rs = await api(`/downloaders/${$("dl").value}/search?q=${encodeURIComponent(q)}`);
-    const box = $("results"); box.classList.remove("hidden");
-    box.innerHTML = rs.map((r,i)=>`<div class="item" data-src="${encodeURIComponent(r.source)}">
-      <span class="t">${esc(r.title)}</span>
-      <span class="m">${r.uploader?esc(r.uploader):""} ${r.duration_s?fmtDur(r.duration_s):""}</span></div>`).join("")
-      || `<div class="item muted">no results</div>`;
-    [...box.querySelectorAll(".item[data-src]")].forEach(el=>el.onclick=()=>{
-      $("src").value = decodeURIComponent(el.dataset.src);
-      [...box.children].forEach(c=>c.classList.remove("sel")); el.classList.add("sel");
-    });
+    renderResults(rs);
     setMsg("");
   }catch(e){ setMsg(e.message, true) }
   $("btnSearch").disabled = false;
 };
+
+// Some backends (ani-cli) return two-level results: a top-level pick is a
+// container (e.g. an anime) that needs a follow-up search(parent=source)
+// to list its leaves (episodes) before there's an actual source to use.
+function renderResults(rs){
+  const box = $("results"); box.classList.remove("hidden");
+  box.innerHTML = rs.map(r=>`<div class="item" data-src="${encodeURIComponent(r.source)}" data-container="${r.is_container?1:0}">
+    <span class="t">${esc(r.title)}${r.is_container?" ›":""}</span>
+    <span class="m">${r.uploader?esc(r.uploader):""} ${r.duration_s?fmtDur(r.duration_s):""}</span></div>`).join("")
+    || `<div class="item muted">no results</div>`;
+  [...box.querySelectorAll(".item[data-src]")].forEach(el=>el.onclick=async ()=>{
+    [...box.children].forEach(c=>c.classList.remove("sel")); el.classList.add("sel");
+    const src = decodeURIComponent(el.dataset.src);
+    if(el.dataset.container === "1"){
+      setMsg("loading…");
+      try{
+        const rs2 = await api(`/downloaders/${$("dl").value}/search?q=&parent=${encodeURIComponent(src)}`);
+        renderResults(rs2);
+        setMsg("");
+      }catch(e){ setMsg(e.message, true) }
+    } else {
+      $("src").value = src;
+    }
+  });
+}
 $("q").addEventListener("keydown", e=>{ if(e.key==="Enter") $("btnSearch").click() });
 
 document.querySelectorAll("#presets button").forEach(b=>{
@@ -220,7 +261,7 @@ $("btnGo").onclick = async () => {
         downloader_id: $("dl").value, source: src,
         format_selector: {mode, format_id: mode==="manual"?manualId:null},
         destination_path: $("dest").value.trim(),
-        options: {embed_metadata: $("embedMeta").checked}
+        options: {embed_metadata: $("embedMeta").checked, dub: $("dubToggle").checked}
       })});
     setMsg("queued ✓"); pollJobs();
   }catch(e){ setMsg(e.message, true) }

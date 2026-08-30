@@ -5,3 +5,7 @@ pydantic>=2
 yt-dlp
 # cover-art embedding for opus/ogg/flac/m4a (EmbedThumbnail postprocessor)
 mutagen
+# ani-cli plugin: Cloudflare sits in front of anidb.app, curl_cffi ships
+# impersonated browser TLS fingerprints (the Python equivalent of the
+# curl-impersonate binaries the upstream ani-cli shell script relies on)
+curl_cffi
