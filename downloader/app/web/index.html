@@ -131,16 +131,40 @@ const api = (p, opt) => fetch(p, opt).then(async r => {
 
 let downloaders = [], caps = null;
 let mode = "best_video_audio", manualId = null;
+let mediaTokens = [];
+// Captured when the user drills into a container (e.g. an anime) so that
+// picking any episode underneath it — now or "another ep" later in the same
+// session — can immediately suggest the same show folder without retyping.
+let currentShowTitle = null, lastAutoDest = "";
 
 async function init(){
   downloaders = await api("/downloaders");
   $("dl").innerHTML = downloaders.map(d=>`<option value="${d.id}">${d.name}</option>`).join("");
   onDownloaderChange();
   const ifs = await api("/interfaces");
+  mediaTokens = ifs.map(i=>i.token);
   $("tokenHint").textContent = ifs.length
     ? "tokens: " + ifs.map(i=>i.placeholder).join(", ") + " → media libraries; plain paths → downloader storage"
     : "plain paths are relative to downloader storage";
   pollJobs(); setInterval(pollJobs, 1500);
+}
+
+// Suggests "$jellyfin$/shows/<Show Title>" (or the first configured media
+// token if "jellyfin" isn't one) once a show is known. Never clobbers a
+// destination the user typed or edited themselves — only fills an empty
+// field, or one still holding our own previous suggestion.
+function maybeAutoFillDest(){
+  if(!currentShowTitle) return;
+  const token = mediaTokens.includes("jellyfin") ? "jellyfin" : mediaTokens[0];
+  if(!token) return;
+  const clean = currentShowTitle.replace(/[\\/:*?"<>|]/g, "_").trim();
+  if(!clean) return;
+  const suggested = `$${token}$/shows/${clean}`;
+  const cur = $("dest").value.trim();
+  if(!cur || cur === lastAutoDest){
+    $("dest").value = suggested;
+    lastAutoDest = suggested;
+  }
 }
 function onDownloaderChange(){
   caps = downloaders.find(d=>d.id===$("dl").value).capabilities;
@@ -165,12 +189,14 @@ function onDownloaderChange(){
   // tokens — stale ones from the previous backend can't be reused.
   $("results").classList.add("hidden"); $("results").innerHTML = "";
   $("src").value = ""; manualId = null;
+  currentShowTitle = null; lastAutoDest = "";
 }
 $("dl").onchange = onDownloaderChange;
 
 $("btnSearch").onclick = async () => {
   const q = $("q").value.trim(); if(!q) return;
   $("btnSearch").disabled = true; setMsg("searching…");
+  currentShowTitle = null;  // fresh top-level search — old show context is stale
   try{
     const rs = await api(`/downloaders/${$("dl").value}/search?q=${encodeURIComponent(q)}`);
     renderResults(rs);
@@ -184,7 +210,8 @@ $("btnSearch").onclick = async () => {
 // to list its leaves (episodes) before there's an actual source to use.
 function renderResults(rs){
   const box = $("results"); box.classList.remove("hidden");
-  box.innerHTML = rs.map(r=>`<div class="item" data-src="${encodeURIComponent(r.source)}" data-container="${r.is_container?1:0}">
+  box.innerHTML = rs.map(r=>`<div class="item" data-src="${encodeURIComponent(r.source)}"
+       data-title="${encodeURIComponent(r.title)}" data-container="${r.is_container?1:0}">
     <span class="t">${esc(r.title)}${r.is_container?" ›":""}</span>
     <span class="m">${r.uploader?esc(r.uploader):""} ${r.duration_s?fmtDur(r.duration_s):""}</span></div>`).join("")
     || `<div class="item muted">no results</div>`;
@@ -192,6 +219,9 @@ function renderResults(rs){
     [...box.children].forEach(c=>c.classList.remove("sel")); el.classList.add("sel");
     const src = decodeURIComponent(el.dataset.src);
     if(el.dataset.container === "1"){
+      // Remember the show's own title (not the episode's) before drilling in —
+      // it's what picking any episode below should suggest a folder from.
+      currentShowTitle = decodeURIComponent(el.dataset.title);
       setMsg("loading…");
       try{
         const rs2 = await api(`/downloaders/${$("dl").value}/search?q=&parent=${encodeURIComponent(src)}`);
@@ -200,6 +230,7 @@ function renderResults(rs){
       }catch(e){ setMsg(e.message, true) }
     } else {
       $("src").value = src;
+      maybeAutoFillDest();
     }
   });
 }
