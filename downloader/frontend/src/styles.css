@@ -48,22 +48,6 @@ h1 .h1-icon {
   padding: 16px;
   margin-bottom: 16px;
 }
-.preview-thumb {
-  display: flex;
-  justify-content: center;
-  margin-bottom: 12px;
-}
-.preview-thumb img {
-  max-width: 100%;
-  max-height: 160px;
-  border-radius: 8px;
-  border: 1px solid var(--line);
-  /* object-fit: contain, not cover — yt-dlp thumbnails are landscape,
-     ani-cli covers are portrait posters; cropping either to a fixed box
-     would hide part of the actual image the whole point is to confirm. */
-  object-fit: contain;
-  display: block;
-}
 label {
   display: block;
   font-size: 12px;
@@ -291,9 +275,10 @@ button:disabled {
   justify-content: center;
   align-items: center;
   width: 100%;
-  /* Sized to match .preview-thumb's 160px cap — this box is meant to get
-     swapped out for the selected result's cover/thumbnail once search
-     picks something, so the two should occupy the same footprint. */
+  /* Shows the looping arrow animation until something is actually picked
+     from search, then swaps to that result's cover/thumbnail so the user
+     can confirm it before committing — same box, same footprint either
+     way, so nothing jumps when it swaps. */
   height: clamp(120px, 22vw, 160px);
   overflow: hidden;
   margin-bottom: 16px;
@@ -301,4 +286,16 @@ button:disabled {
 
 .bigLogoReplacement [data-omelette-chrome] {
   display: none;
+}
+
+.bigLogoReplacement img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  /* object-fit: contain, not cover — yt-dlp thumbnails are landscape,
+     ani-cli covers are portrait posters; cropping either to a fixed box
+     would hide part of the actual image the whole point is to confirm. */
+  object-fit: contain;
+  display: block;
 }

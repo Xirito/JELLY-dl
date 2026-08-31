@@ -198,7 +198,19 @@ export default function App() {
         Jelly Downloader
       </h1>
       <div className="bigLogoReplacement">
-        <ArrowVideo showControls={false} />
+        {previewThumbnail ? (
+          <img
+            src={previewThumbnail}
+            alt=""
+            onError={() => {
+              // Broken/blocked image (dead CDN link, ad-blocker, etc.) —
+              // fall back to the animation rather than show a broken box.
+              setPreviewThumbnail(null);
+            }}
+          />
+        ) : (
+          <ArrowVideo showControls={false} />
+        )}
       </div>
       <div className="card">
         <BackendSelect downloaders={downloaders} value={downloaderId} onChange={setDownloaderId} />
@@ -232,19 +244,6 @@ export default function App() {
       />
 
       <div className="card">
-        {previewThumbnail && (
-          <div className="preview-thumb">
-            <img
-              src={previewThumbnail}
-              alt=""
-              onError={(e) => {
-                // Broken/blocked image (dead CDN link, ad-blocker, etc.) —
-                // hide it rather than show a broken-image box.
-                e.currentTarget.parentElement?.classList.add("hidden");
-              }}
-            />
-          </div>
-        )}
         <DestinationField
           downloaderId={downloaderId}
           value={destination}
