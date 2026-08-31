@@ -34,6 +34,26 @@ Leech-only, three layers deep so there's no meaningful seeding window:
 The WebUI is bound to 127.0.0.1 only and never published in docker-compose
 — nothing outside this container's own process can reach it, and nothing
 outside this file ever needs to.
+
+Connectivity: unlike the WebUI, the actual BitTorrent peer port (_TORRENT_PORT,
+below) *does* need to be reachable from the internet for good performance —
+without it, this client can only dial out, never be dialed in, and ends up
+connecting to a much smaller and worse-behaved slice of a swarm (in
+practice: plenty of leechers, but rarely any of the well-seeded ones). To
+get that:
+  1. In docker-compose.yml, publish _TORRENT_PORT for both protocols, e.g.
+     `ports: ["45123:45123/tcp", "45123:45123/udp"]` (alongside the
+     existing 8790 mapping for the web app itself).
+  2. Forward that same port to this box on your router (or, simpler if
+     your setup allows it: run this container with `network_mode: host`
+     instead of the default bridge network — then qBittorrent's own UPnP
+     client, enabled below, can usually punch the hole itself with zero
+     manual router config, since it can see the box's real LAN IP).
+Neither of these is something this app can do from inside the container —
+they're infrastructure, not code — so they're not automatic; this module
+only pins the port number and turns on every discovery mechanism
+(UPnP/DHT/PeX/LSD) it can, so whichever path you take actually has
+something to grab onto.
 """
 from __future__ import annotations
 
@@ -56,6 +76,10 @@ from ..models import DownloadProgress
 log = logging.getLogger("torrent_client")
 
 _WEBUI_PORT = 18080
+# BitTorrent peer port — must be published from Docker (both TCP and UDP)
+# and ideally forwarded on the router for good connectivity. See the
+# module docstring and _apply_network_prefs() below.
+_TORRENT_PORT = 45123
 _HOST = "127.0.0.1"
 _STARTUP_TIMEOUT_S = 30
 _ADD_TIMEOUT_S = 20
@@ -202,6 +226,7 @@ class TorrentClientManager:
                     "qbittorrent-nox ready on port %s after %.1fs (%d login attempt(s))",
                     self.port, time.monotonic() - started, attempt + 1,
                 )
+                self._apply_network_prefs(client)
                 return
             except Exception as e:  # noqa: BLE001 — still booting, keep polling
                 attempt += 1
@@ -220,6 +245,41 @@ class TorrentClientManager:
                 time.sleep(0.5)
         log.error("qbittorrent-nox never became ready after %ss: %s", _STARTUP_TIMEOUT_S, last_err)
         raise TorrentClientError(f"qbittorrent-nox never became ready: {last_err}")
+
+    @staticmethod
+    def _apply_network_prefs(client: qbittorrentapi.Client) -> None:
+        # We never configured a BitTorrent peer port at all before this —
+        # qBittorrent defaulted to picking a random one on every launch,
+        # which Docker never published and no router ever forwarded.
+        # seeds=0 (never connects to any of the swarm's seeders) with
+        # leechs fluctuating, stuck in "metaDL" forever, is the classic
+        # symptom of a torrent client with no reachable inbound port: it
+        # can still dial *out*, but only the (usually worse-connected)
+        # peers that happen to dial *it* first ever complete a connection,
+        # and it's effectively invisible to everyone else, including
+        # well-behaved seeders.
+        #
+        # Fixing this at the network level (Docker port publish + router
+        # forward, or host networking) is outside this repo — see the
+        # module docstring — but this is the qBittorrent-side half:
+        # pin a fixed, known port instead of a random one (so it CAN be
+        # forwarded), and make sure UPnP/DHT/PeX/LSD are all on so it has
+        # every possible avenue to actually be reachable. Best-effort and
+        # non-fatal: a login that succeeds but can't set preferences still
+        # means a working (if possibly still poorly-connected) client.
+        try:
+            client.app_set_preferences({
+                "listen_port": _TORRENT_PORT,
+                "random_port": False,
+                "upnp": True,
+                "dht": True,
+                "pex": True,
+                "lsd": True,
+            })
+            log.info("qbittorrent-nox: pinned BitTorrent listen port to %s (UPnP/DHT/PeX/LSD on)",
+                      _TORRENT_PORT)
+        except Exception as e:  # noqa: BLE001
+            log.warning("qbittorrent-nox: could not set network preferences: %s", e)
 
     def _start_locked(self, should_cancel: Callable[[], bool] | None = None) -> None:
         if self._proc is not None:
