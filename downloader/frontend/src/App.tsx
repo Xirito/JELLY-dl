@@ -19,6 +19,11 @@ export default function App() {
 
   const [src, setSrc] = useState("");
   const [currentShowTitle, setCurrentShowTitle] = useState<string | null>(null);
+  // Set once something is actually picked — a video (yt-dlp) or a show
+  // (ani-cli, as soon as its episode list loads) — so there's a visual
+  // "yes, this is what I'm about to download" right before committing.
+  // Never populated from the results list itself; see SearchPanel.
+  const [previewThumbnail, setPreviewThumbnail] = useState<string | null>(null);
   const [destination, setDestination] = useState("");
   const lastAutoDestRef = useRef("");
 
@@ -101,6 +106,7 @@ export default function App() {
     setManualId(null);
     setSrc("");
     setCurrentShowTitle(null);
+    setPreviewThumbnail(null);
     lastAutoDestRef.current = "";
     setMsg("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -200,6 +206,7 @@ export default function App() {
           onSrcChange={setSrc}
           currentShowTitle={currentShowTitle}
           setCurrentShowTitle={setCurrentShowTitle}
+          setPreviewThumbnail={setPreviewThumbnail}
           maybeAutoFillDest={maybeAutoFillDest}
           destination={destination}
           mode={mode}
@@ -222,6 +229,19 @@ export default function App() {
       />
 
       <div className="card">
+        {previewThumbnail && (
+          <div className="preview-thumb">
+            <img
+              src={previewThumbnail}
+              alt=""
+              onError={(e) => {
+                // Broken/blocked image (dead CDN link, ad-blocker, etc.) —
+                // hide it rather than show a broken-image box.
+                e.currentTarget.parentElement?.classList.add("hidden");
+              }}
+            />
+          </div>
+        )}
         <DestinationField
           downloaderId={downloaderId}
           value={destination}

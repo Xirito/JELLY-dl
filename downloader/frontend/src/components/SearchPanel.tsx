@@ -11,6 +11,7 @@ interface SearchPanelProps {
   onSrcChange: (v: string) => void;
   currentShowTitle: string | null;
   setCurrentShowTitle: (t: string | null) => void;
+  setPreviewThumbnail: (url: string | null) => void;
   maybeAutoFillDest: (title: string | null) => void;
   destination: string;
   mode: Mode;
@@ -33,6 +34,7 @@ export default function SearchPanel({
   onSrcChange,
   currentShowTitle,
   setCurrentShowTitle,
+  setPreviewThumbnail,
   maybeAutoFillDest,
   destination,
   mode,
@@ -67,6 +69,7 @@ export default function SearchPanel({
     setSearching(true);
     setMsg("searching…");
     setCurrentShowTitle(null); // fresh top-level search — old show context is stale
+    setPreviewThumbnail(null); // ...and so is whatever was previously picked
     try {
       const rs = await api<SearchResult[]>(`/downloaders/${downloaderId}/search?q=${encodeURIComponent(q)}`);
       setResults(rs);
@@ -96,12 +99,18 @@ export default function SearchPanel({
         setResultsAreLeaf(true);
         setHasSearched(true);
         setMsg("");
+        // Every episode is tagged with the same show cover (see
+        // anicli_plugin.py — one fetch for the anime just picked, not one
+        // per episode) — so it's ready the moment the episode list is,
+        // before any specific episode is even clicked.
+        setPreviewThumbnail(rs2[0]?.thumbnail ?? null);
       } catch (e) {
         setMsg((e as Error).message, true);
       }
     } else {
       onSrcChange(r.source);
       maybeAutoFillDest(currentShowTitle);
+      setPreviewThumbnail(r.thumbnail ?? null);
     }
   }
 

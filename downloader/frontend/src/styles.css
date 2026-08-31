@@ -48,6 +48,22 @@ h1 .h1-icon {
   padding: 16px;
   margin-bottom: 16px;
 }
+.preview-thumb {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+.preview-thumb img {
+  max-width: 100%;
+  max-height: 160px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  /* object-fit: contain, not cover — yt-dlp thumbnails are landscape,
+     ani-cli covers are portrait posters; cropping either to a fixed box
+     would hide part of the actual image the whole point is to confirm. */
+  object-fit: contain;
+  display: block;
+}
 label {
   display: block;
   font-size: 12px;

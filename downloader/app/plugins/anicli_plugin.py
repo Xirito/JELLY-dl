@@ -128,9 +128,18 @@ class AniCliDownloader:
         eps = self._episodes(anime_id)
         if not eps:
             raise AniCliError("no episodes found for that anime")
+        # One extra request here, for the single anime just picked — not per
+        # search result. The browse/search results page has no cover images
+        # of its own (verified against the live site), only each anime's own
+        # detail page does (its og:image tag). Every episode gets tagged with
+        # the same cover so the frontend can show a "you're about to
+        # download this" preview as soon as the episode list appears,
+        # without a separate per-episode fetch.
+        cover = self._anime_cover(anime_id)
         return [
             SearchResult(source=f"{anime_id}{_SOURCE_SEP}{ep_no}",
-                         title=f"Episode {ep_no}", is_container=False)
+                         title=f"Episode {ep_no}", is_container=False,
+                         thumbnail=cover)
             for _ep_id, ep_no in eps
         ]
 
@@ -170,6 +179,19 @@ class AniCliDownloader:
         m = re.search(r'property="og:title"\s+content="([^"]+)"', page)
         if not m:
             m = re.search(r"<title>([^<]+)</title>", page)
+        return html.unescape(m.group(1)).strip() if m else None
+
+    def _anime_cover(self, anime_id: str) -> str | None:
+        # og:image on the anime's own detail page (verified: e.g.
+        # https://anidb.app/anime/bleach-670 -> https://cdn.xlsbox.com/
+        # poster/small/.../670.jpg). The browse/search results page has no
+        # images of its own, so this is the only source — best-effort, same
+        # as _anime_title: any failure just means no preview, not an error.
+        try:
+            page = _get(_DESC_URL.format(anime_id=anime_id)).text
+        except Exception:
+            return None
+        m = re.search(r'property="og:image"\s+content="([^"]+)"', page)
         return html.unescape(m.group(1)).strip() if m else None
 
     def _split_leaf(self, source: str) -> tuple[str, str]:

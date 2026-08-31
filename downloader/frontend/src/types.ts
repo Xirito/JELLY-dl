@@ -26,6 +26,7 @@ export interface SearchResult {
   is_container: boolean;
   uploader?: string | null;
   duration_s?: number | null;
+  thumbnail?: string | null;
 }
 
 export interface FormatOption {
