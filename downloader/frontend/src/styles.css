@@ -276,3 +276,29 @@ button:disabled {
   flex: 0 0 auto;
   accent-color: var(--accent);
 }
+
+/* Header arrow animation (src/animation/) — a looping SVG scene rendered
+   into this box. The box just needs a size; the animation's own Stage
+   component measures it via ResizeObserver and scales its content to
+   fit, so this height is the only thing controlling how big it looks. */
+.om-stage-canvas {
+  background: transparent;
+}
+
+.bigLogoReplacement {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  /* Sized to match .preview-thumb's 160px cap — this box is meant to get
+     swapped out for the selected result's cover/thumbnail once search
+     picks something, so the two should occupy the same footprint. */
+  height: clamp(120px, 22vw, 160px);
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+
+.bigLogoReplacement [data-omelette-chrome] {
+  display: none;
+}

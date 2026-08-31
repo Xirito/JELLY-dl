@@ -27,6 +27,7 @@
     margin: 0 auto;
   }
 
+
   .base {
     width: 170px;
     position: relative;
@@ -181,4 +182,24 @@
     right: 0;
     border-right-color: var(--border);
   }
+}
+
+.om-stage-canvas{
+  background: transparent;
+}
+
+.bigLogoReplacement {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  height: clamp(240px, 30vw, 360px);
+  overflow: hidden;
+  /* background: #08080d; */
+  margin-bottom: 24px;
+}
+
+.bigLogoReplacement [data-omelette-chrome] {
+  display: none;
 }

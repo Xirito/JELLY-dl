@@ -8,6 +8,7 @@ import FormatPicker from "./components/FormatPicker";
 import DestinationField from "./components/DestinationField";
 import DownloadButton from "./components/DownloadButton";
 import JobQueue from "./components/JobQueue";
+import ArrowVideo from "./animation/arrow-scene.jsx";
 import { APP_VERSION } from "./version";
 
 const DEFAULT_MODES: Mode[] = ["best_video_audio", "best_audio", "best_video_only", "manual"];
@@ -194,9 +195,11 @@ export default function App() {
     <div className="wrap">
       <h1>
         <img src="/logo.png" alt="" className="h1-icon" />
-        Downloader
+        Jelly Downloader
       </h1>
-
+      <div className="bigLogoReplacement">
+        <ArrowVideo showControls={false} />
+      </div>
       <div className="card">
         <BackendSelect downloaders={downloaders} value={downloaderId} onChange={setDownloaderId} />
         <SearchPanel
