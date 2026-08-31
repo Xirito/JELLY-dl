@@ -2,12 +2,9 @@
 
 Unlike YtdlpDownloader, this does NOT shell out to the actual `ani-cli`
 shell script (which is built for an interactive terminal with fzf). Instead
-it re-implements the same anidb.app scraping steps the script itself uses
-(see https://github.com/pystardust/ani-cli, function names kept as comments
-below for cross-reference), driven from Python so it fits the request/
-response shape the rest of this app expects. All ani-cli/anidb.app-specific
-knowledge — endpoints, page-scraping regexes, the HLS master-playlist
-format — stays inside this file.
+it drives the shared anidb.app client in services/anidb.py (extracted here
+so NyaaTorDownloader can reuse the same site knowledge — see that file's
+docstring) to fit the request/response shape the rest of this app expects.
 
 Two things make anime downloading a different shape from yt-dlp, and both
 are handled generically rather than bolted on as ani-cli-only code:
@@ -21,21 +18,12 @@ are handled generically rather than bolted on as ani-cli-only code:
    HLS master playlist, not yt-dlp's rich per-format metadata — and there's
    no separate "audio only" or "video only" stream to offer, so
    `capabilities.available_modes` only advertises best_video_audio + manual.
-
-Cloudflare sits in front of anidb.app, which is why the upstream shell
-script insists on curl-impersonate binaries. `curl_cffi` is the Python
-equivalent (ships its own impersonated TLS/JA3 fingerprints) and is used
-for every request this plugin makes to anidb.app.
 """
 from __future__ import annotations
 
-import html
 import re
 from pathlib import Path
 from typing import Callable
-from urllib.parse import urljoin
-
-from curl_cffi import requests as curl_requests
 
 from ..config import DOWNLOAD_ROOT
 from ..models import (
@@ -47,29 +35,10 @@ from ..models import (
     FormatSelector,
     SearchResult,
 )
-
-_BASE = "https://anidb.app"
-_SEARCH_URL = _BASE + "/browse?q={q}"
-_DESC_URL = _BASE + "/anime/{anime_id}"
-_EPISODES_URL = _BASE + "/api/frontend/anime/{numeric_id}/episodes"
-_LANGUAGES_URL = _BASE + "/api/frontend/episode/{episode_id}/languages"
-
-_IMPERSONATE = "chrome124"
-_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+from ..services import anidb
+from ..services.anidb import AniDbError as AniCliError
 
 _SOURCE_SEP = "::"  # anime_id::ep_no  (leaf source token)
-
-
-class AniCliError(RuntimeError):
-    pass
-
-
-def _get(url: str, timeout: int = 15) -> curl_requests.Response:
-    resp = curl_requests.get(url, impersonate=_IMPERSONATE,
-                              headers={"User-Agent": _UA}, timeout=timeout)
-    resp.raise_for_status()
-    return resp
 
 
 class AniCliDownloader:
@@ -98,34 +67,11 @@ class AniCliDownloader:
             raise AniCliError("search query is required")
         return [
             SearchResult(source=anime_id, title=title, is_container=True)
-            for anime_id, title in self._search_anime(query)[:20]
+            for anime_id, title in anidb.search_anime(query)[:20]
         ]
 
-    def _search_anime(self, query: str) -> list[tuple[str, str]]:
-        # anidb_search(): GET /browse?q=..., pull (id, title) pairs out of
-        # each <a href=".../anime/<id>" ...alt="<title>"...> anchor.
-        page = _get(_SEARCH_URL.format(q=query.replace(" ", "+"))).text
-        if "Just a moment" in page:
-            raise AniCliError("blocked by Cloudflare — try again in a bit")
-        flat = page.replace("\n", " ")
-        out: list[tuple[str, str]] = []
-        seen: set[str] = set()
-        for chunk in re.split(r"(?=<a href)", flat):
-            m = re.search(r'anime/([a-z0-9-]+-[0-9]+)"', chunk)
-            if not m:
-                continue
-            alt = re.search(r'alt="([^"]+)"', chunk)
-            if not alt:
-                continue
-            anime_id = m.group(1)
-            if anime_id in seen:
-                continue
-            seen.add(anime_id)
-            out.append((anime_id, html.unescape(alt.group(1))))
-        return out
-
     def _list_episodes(self, anime_id: str) -> list[SearchResult]:
-        eps = self._episodes(anime_id)
+        eps = anidb.episodes(anime_id)
         if not eps:
             raise AniCliError("no episodes found for that anime")
         # One extra request here, for the single anime just picked — not per
@@ -135,64 +81,13 @@ class AniCliDownloader:
         # the same cover so the frontend can show a "you're about to
         # download this" preview as soon as the episode list appears,
         # without a separate per-episode fetch.
-        cover = self._anime_cover(anime_id)
+        cover = anidb.anime_cover(anime_id)
         return [
             SearchResult(source=f"{anime_id}{_SOURCE_SEP}{ep_no}",
                          title=f"Episode {ep_no}", is_container=False,
                          thumbnail=cover)
             for _ep_id, ep_no in eps
         ]
-
-    def _episodes(self, anime_id: str) -> list[tuple[str, str]]:
-        # anidb_episodes(): numeric id is whatever follows the last "-" in
-        # the slug (e.g. "bleach-100" -> "100").
-        numeric_id = anime_id.rsplit("-", 1)[-1]
-        resp = _get(_EPISODES_URL.format(numeric_id=numeric_id))
-        try:
-            data = resp.json()
-        except ValueError:
-            data = []
-        out: list[tuple[str, str]] = []
-        entries = data if isinstance(data, list) else data.get("episodes", [])
-        for e in entries:
-            if not isinstance(e, dict):
-                continue
-            ep_id = e.get("id")
-            ep_no = e.get("number")
-            if ep_id is None or ep_no is None:
-                continue
-            out.append((str(ep_id), str(ep_no)))
-        # numeric sort where possible, stable otherwise
-        def _key(t: tuple[str, str]):
-            try:
-                return (0, float(t[1]))
-            except ValueError:
-                return (1, t[1])
-        out.sort(key=_key)
-        return out
-
-    def _anime_title(self, anime_id: str) -> str | None:
-        try:
-            page = _get(_DESC_URL.format(anime_id=anime_id)).text
-        except Exception:
-            return None
-        m = re.search(r'property="og:title"\s+content="([^"]+)"', page)
-        if not m:
-            m = re.search(r"<title>([^<]+)</title>", page)
-        return html.unescape(m.group(1)).strip() if m else None
-
-    def _anime_cover(self, anime_id: str) -> str | None:
-        # og:image on the anime's own detail page (verified: e.g.
-        # https://anidb.app/anime/bleach-670 -> https://cdn.xlsbox.com/
-        # poster/small/.../670.jpg). The browse/search results page has no
-        # images of its own, so this is the only source — best-effort, same
-        # as _anime_title: any failure just means no preview, not an error.
-        try:
-            page = _get(_DESC_URL.format(anime_id=anime_id)).text
-        except Exception:
-            return None
-        m = re.search(r'property="og:image"\s+content="([^"]+)"', page)
-        return html.unescape(m.group(1)).strip() if m else None
 
     def _split_leaf(self, source: str) -> tuple[str, str]:
         if _SOURCE_SEP not in source:
@@ -206,7 +101,7 @@ class AniCliDownloader:
         return anime_id, ep_no
 
     def _resolve_episode_id(self, anime_id: str, ep_no: str) -> str:
-        for ep_id, no in self._episodes(anime_id):
+        for ep_id, no in anidb.episodes(anime_id):
             if no == ep_no:
                 return ep_id
         raise AniCliError(f"episode {ep_no} not found")
@@ -218,7 +113,7 @@ class AniCliDownloader:
         # Quality tiers are usually identical across sub/dub for the same
         # episode; list against sub (almost always available) and let
         # download() re-resolve against the actually-requested language.
-        streams, _referer = self._quality_links(ep_id, lang="jpn")
+        streams, _referer = anidb.quality_links(ep_id, lang="jpn")
         return [
             FormatOption(
                 format_id=label,
@@ -230,72 +125,6 @@ class AniCliDownloader:
             )
             for height, label, _url in streams
         ]
-
-    def _quality_links(
-        self, episode_id: str, lang: str
-    ) -> tuple[list[tuple[str | None, str, str]], str | None]:
-        # anidb_m3u8(): languages endpoint -> pick the embed_url whose entry
-        # mentions our language -> scrape the player page for the m3u8
-        # master URL -> parse it into (height, label, url) tuples, best first.
-        # Returns (streams, referer_url) — the embed page doubles as the
-        # Referer the CDN expects on the actual segment/download requests.
-        resp = _get(_LANGUAGES_URL.format(episode_id=episode_id))
-        try:
-            entries = resp.json()
-        except ValueError:
-            entries = []
-        # The endpoint wraps the array in {"languages": [...]}, not a bare list.
-        if isinstance(entries, dict):
-            entries = entries.get("languages", [])
-        if not isinstance(entries, list):
-            entries = []
-        embed_url = None
-        for e in entries:
-            if not isinstance(e, dict) or not e.get("embed_url"):
-                continue
-            if e.get("code") == lang or lang in str(e):
-                embed_url = e["embed_url"]
-                break
-        if not embed_url:
-            return [], None
-        embed_page = _get(embed_url).text
-        m = re.search(r"file:\s*'([^']+)'", embed_page)
-        if not m:
-            return [], embed_url
-        master_url = m.group(1)
-        master = _get(master_url).text
-        return self._parse_master_playlist(master, master_url), embed_url
-
-    @staticmethod
-    def _parse_master_playlist(text: str, base_url: str) -> list[tuple[str | None, str, str]]:
-        lines = text.splitlines()
-        out: list[tuple[str | None, str, str]] = []
-        i = 0
-        while i < len(lines):
-            line = lines[i]
-            if line.startswith("#EXT-X-STREAM-INF") and "I-FRAME" not in line:
-                m = re.search(r"RESOLUTION=\d+x(\d+)", line)
-                height = m.group(1) if m else None
-                j = i + 1
-                while j < len(lines) and (not lines[j].strip() or lines[j].startswith("#")):
-                    j += 1
-                if j < len(lines):
-                    url = lines[j].strip()
-                    if not re.match(r"^https?://", url):
-                        url = urljoin(base_url, url)
-                    label = f"{height}p" if height else "?"
-                    out.append((height, label, url))
-                i = j
-            i += 1
-
-        def _h(t: tuple[str | None, str, str]) -> int:
-            try:
-                return int(t[0]) if t[0] else -1
-            except ValueError:
-                return -1
-
-        out.sort(key=_h, reverse=True)
-        return out
 
     @staticmethod
     def _select_quality(streams: list[tuple[str | None, str, str]], want: str | None):
@@ -330,7 +159,7 @@ class AniCliDownloader:
             anime_id, ep_no = self._split_leaf(source)
             lang = "eng" if (options and options.dub) else "jpn"
             ep_id = self._resolve_episode_id(anime_id, ep_no)
-            streams, referer = self._quality_links(ep_id, lang)
+            streams, referer = anidb.quality_links(ep_id, lang)
             if not streams:
                 kind = "dub" if lang == "eng" else "sub"
                 raise AniCliError(f"no {kind} source found for episode {ep_no}")
@@ -339,7 +168,7 @@ class AniCliDownloader:
             if not chosen:
                 raise AniCliError("no playable stream found")
             _height, _label, video_link = chosen
-            anime_title = self._anime_title(anime_id) or anime_id
+            anime_title = anidb.anime_title(anime_id) or anime_id
         except Exception as e:
             on_progress(DownloadProgress(status="error"))
             return DownloadResult(error=str(e)[:2000])
@@ -390,7 +219,7 @@ class AniCliDownloader:
             "postprocessor_hooks": [pp_hook],
             "merge_output_format": "mp4",
             "noplaylist": True,
-            "http_headers": {"User-Agent": _UA, "Referer": referer or video_link},
+            "http_headers": {"User-Agent": anidb.USER_AGENT, "Referer": referer or video_link},
         }
 
         try:
@@ -417,5 +246,5 @@ class AniCliDownloader:
             anime_id, ep_no = self._split_leaf(source)
         except AniCliError:
             return None
-        title = self._anime_title(anime_id)
+        title = anidb.anime_title(anime_id)
         return f"{title} - Episode {ep_no}" if title else f"Episode {ep_no}"

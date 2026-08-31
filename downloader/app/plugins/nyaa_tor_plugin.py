@@ -13,6 +13,16 @@ one site — nyaa.si is the first indexer, not the only one this is meant to
 support. Results are flat, like yt-dlp's (no container/drill-down step,
 unlike ani-cli's anime->episode split) — a torrent search result already
 IS the thing to download, nothing to pick after it.
+
+There's a separate, optional pre-search step layered on top of that flat
+search: anime_search()/anime_details() (capabilities.supports_anime_lookup)
+resolve a free-text anime name against anidb.app — same shared client
+ani-cli's plugin uses (services/anidb.py) — to an official title (plus
+romaji/synonyms, if anidb.app has them) and cover art, before the frontend
+composes the actual `search(query=...)` call above (typically as
+"[GroupTag] <chosen title>", though the release-group tag itself is a
+frontend-only concept — this file never sees or validates it, a torrent
+search here is just a query string like any other).
 """
 from __future__ import annotations
 
@@ -23,6 +33,8 @@ from urllib.parse import parse_qs, urlparse
 
 from ..config import DOWNLOAD_ROOT
 from ..models import (
+    AnimeDetails,
+    AnimeMatch,
     DownloaderCapabilities,
     DownloadOptions,
     DownloadProgress,
@@ -31,6 +43,7 @@ from ..models import (
     FormatSelector,
     SearchResult,
 )
+from ..services import anidb
 from ..services.torrent_client import TorrentClientManager
 from .torrent_providers import NyaaProvider, TorrentProvider
 
@@ -50,6 +63,7 @@ class NyaaTorDownloader:
         # — best_video_audio (meaning: whatever the torrent contains) is
         # the only preset that makes sense here.
         available_modes=["best_video_audio"],
+        supports_anime_lookup=True,
     )
 
     def __init__(
@@ -108,6 +122,28 @@ class NyaaTorDownloader:
             # search that other providers still answered.
             raise RuntimeError("; ".join(errors))
         return results
+
+    # -- anime lookup (optional pre-search step, see module docstring) -------
+    def anime_search(self, query: str) -> list[AnimeMatch]:
+        query = (query or "").strip()
+        if not query:
+            raise ValueError("search query is required")
+        return [
+            AnimeMatch(id=anime_id, title=title)
+            for anime_id, title in anidb.search_anime(query)[:20]
+        ]
+
+    def anime_details(self, anime_id: str) -> AnimeDetails:
+        detail = anidb.anime_detail(anime_id)
+        if detail is None:
+            raise anidb.AniDbError("couldn't load that anime's page")
+        variants = [detail.official]
+        if detail.romaji and detail.romaji.lower() != detail.official.lower():
+            variants.append(detail.romaji)
+        for syn in detail.synonyms:
+            if syn and syn.lower() not in (v.lower() for v in variants):
+                variants.append(syn)
+        return AnimeDetails(title=detail.official, cover=detail.cover, title_variants=variants)
 
     # -- formats -------------------------------------------------------------
     def list_formats(self, source: str) -> list[FormatOption]:

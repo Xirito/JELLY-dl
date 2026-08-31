@@ -20,12 +20,32 @@ class DownloaderCapabilities(BaseModel):
     available_modes: list[str] = [
         "best_video_audio", "best_audio", "best_video_only", "manual",
     ]
+    # Optional pre-search step (nyaa_tor): resolve a free-text anime name
+    # against anidb.app to an official title (+ romaji/synonyms, if any)
+    # and cover art, before composing the actual torrent search query.
+    # Gates the /anime-search and /anime/{id} routes below — see main.py.
+    supports_anime_lookup: bool = False
 
 
 class DownloaderInfo(BaseModel):
     id: str
     name: str
     capabilities: DownloaderCapabilities
+
+
+class AnimeMatch(BaseModel):
+    id: str
+    title: str
+
+
+class AnimeDetails(BaseModel):
+    title: str
+    cover: Optional[str] = None
+    # Always at least one entry (the official title) so callers never have
+    # to special-case "empty" — romaji/synonyms are appended when anidb.app
+    # actually has them (best-effort scrape, often nothing beyond the
+    # official title — see services/anidb.py's anime_detail()).
+    title_variants: list[str] = []
 
 
 class SearchResult(BaseModel):

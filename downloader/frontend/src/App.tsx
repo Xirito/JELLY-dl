@@ -4,6 +4,7 @@ import type { DownloaderInfo, FormatOption, MediaInterface, Mode } from "./types
 import { useJobPolling } from "./hooks/useJobPolling";
 import BackendSelect from "./components/BackendSelect";
 import SearchPanel from "./components/SearchPanel";
+import AnimeTorrentPanel from "./components/AnimeTorrentPanel";
 import FormatPicker from "./components/FormatPicker";
 import DestinationField from "./components/DestinationField";
 import DownloadButton from "./components/DownloadButton";
@@ -214,22 +215,33 @@ export default function App() {
       </div>
       <div className="card">
         <BackendSelect downloaders={downloaders} value={downloaderId} onChange={setDownloaderId} />
-        <SearchPanel
-          downloaderId={downloaderId}
-          searchSupported={!!caps?.supports_search}
-          src={src}
-          onSrcChange={setSrc}
-          currentShowTitle={currentShowTitle}
-          setCurrentShowTitle={setCurrentShowTitle}
-          setPreviewThumbnail={setPreviewThumbnail}
-          maybeAutoFillDest={maybeAutoFillDest}
-          destination={destination}
-          mode={mode}
-          embedMeta={embedMeta}
-          dub={dub}
-          setMsg={setMsg}
-          refreshJobs={refreshJobs}
-        />
+        {caps?.supports_anime_lookup ? (
+          <AnimeTorrentPanel
+            downloaderId={downloaderId}
+            src={src}
+            onSrcChange={setSrc}
+            setPreviewThumbnail={setPreviewThumbnail}
+            maybeAutoFillDest={maybeAutoFillDest}
+            setMsg={setMsg}
+          />
+        ) : (
+          <SearchPanel
+            downloaderId={downloaderId}
+            searchSupported={!!caps?.supports_search}
+            src={src}
+            onSrcChange={setSrc}
+            currentShowTitle={currentShowTitle}
+            setCurrentShowTitle={setCurrentShowTitle}
+            setPreviewThumbnail={setPreviewThumbnail}
+            maybeAutoFillDest={maybeAutoFillDest}
+            destination={destination}
+            mode={mode}
+            embedMeta={embedMeta}
+            dub={dub}
+            setMsg={setMsg}
+            refreshJobs={refreshJobs}
+          />
+        )}
       </div>
 
       <FormatPicker

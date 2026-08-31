@@ -12,12 +12,27 @@ export interface DownloaderCapabilities {
   // no separate audio-only/video-only stream to offer). Falls back to all
   // four when the backend doesn't restrict it.
   available_modes?: Mode[];
+  // Optional pre-search step (nyaa_tor): resolve a free-text anime name
+  // against anidb.app before composing the actual torrent search — gates
+  // rendering AnimeTorrentPanel instead of the plain SearchPanel.
+  supports_anime_lookup?: boolean;
 }
 
 export interface DownloaderInfo {
   id: string;
   name: string;
   capabilities: DownloaderCapabilities;
+}
+
+export interface AnimeMatch {
+  id: string;
+  title: string;
+}
+
+export interface AnimeDetails {
+  title: string;
+  cover?: string | null;
+  title_variants: string[];
 }
 
 export interface SearchResult {

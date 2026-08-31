@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import MEDIA_SERVER_TARGETS
-from .models import DownloadRequest, DownloaderInfo, JobInfo
+from .models import AnimeDetails, AnimeMatch, DownloadRequest, DownloaderInfo, JobInfo
 from .registry import build_default_registry
 from .services.directory_browser import DirectoryBrowser
 from .services.download_service import DownloadService
@@ -57,6 +57,34 @@ def formats(downloader_id: str, source: str = Query(min_length=1)):
         return d.list_formats(source)
     except Exception as e:
         raise HTTPException(502, f"format listing failed: {e}")
+
+
+@app.get("/downloaders/{downloader_id}/anime-search", response_model=list[AnimeMatch])
+def anime_search(downloader_id: str, q: str = Query(min_length=1)):
+    d = _get_downloader(downloader_id)
+    if not d.capabilities.supports_anime_lookup:
+        raise HTTPException(400, f"{downloader_id} does not support anime lookup")
+    fn = getattr(d, "anime_search", None)
+    if not callable(fn):
+        raise HTTPException(500, f"{downloader_id} advertises anime lookup but doesn't implement it")
+    try:
+        return fn(q)
+    except Exception as e:
+        raise HTTPException(502, f"anime search failed: {e}")
+
+
+@app.get("/downloaders/{downloader_id}/anime/{anime_id}", response_model=AnimeDetails)
+def anime_details(downloader_id: str, anime_id: str):
+    d = _get_downloader(downloader_id)
+    if not d.capabilities.supports_anime_lookup:
+        raise HTTPException(400, f"{downloader_id} does not support anime lookup")
+    fn = getattr(d, "anime_details", None)
+    if not callable(fn):
+        raise HTTPException(500, f"{downloader_id} advertises anime lookup but doesn't implement it")
+    try:
+        return fn(anime_id)
+    except Exception as e:
+        raise HTTPException(502, f"anime lookup failed: {e}")
 
 
 @app.post("/downloads", response_model=JobInfo)
