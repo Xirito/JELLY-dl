@@ -52,7 +52,17 @@ def _extract_og_title(page: str) -> str | None:
     m = re.search(r'property="og:title"\s+content="([^"]+)"', page)
     if not m:
         m = re.search(r"<title>([^<]+)</title>", page)
-    return html.unescape(m.group(1)).strip() if m else None
+    if not m:
+        return None
+    title = html.unescape(m.group(1)).strip()
+    # anidb.app appends a " — AniDB" (or similar dash) site-name suffix to
+    # both its og:title and <title> tag — confirmed live (e.g. "[Oshi No
+    # Ko] Season 2 — AniDB"). Strip it here, the one shared extraction
+    # point, so it can't leak into a job title (anime_title(), used by
+    # ani-cli) or a composed torrent search query (anime_detail(), used by
+    # nyaa_tor) ever again.
+    title = re.sub(r"\s*[-–—―|]\s*AniDB\s*$", "", title, flags=re.IGNORECASE).strip()
+    return title or None
 
 
 # -- search / browse -----------------------------------------------------
