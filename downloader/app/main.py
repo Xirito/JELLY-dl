@@ -23,13 +23,6 @@ service = DownloadService(registry, resolver)
 
 WEB_DIR = Path(__file__).parent / "web"
 
-# Populated by the frontend's Vite build (see downloader/Dockerfile) —
-# hashed JS/CSS chunks the built index.html references as /assets/*.
-# Guarded so a plain local `uvicorn app.main:app` still starts before
-# the frontend has ever been built.
-if (WEB_DIR / "assets").is_dir():
-    app.mount("/assets", StaticFiles(directory=WEB_DIR / "assets"), name="assets")
-
 
 @app.get("/")
 def index():
@@ -116,3 +109,16 @@ def _get_downloader(downloader_id: str):
         return registry.get(downloader_id)
     except KeyError as e:
         raise HTTPException(404, str(e))
+
+
+# Everything else the built frontend serves out of the dist root — the PWA
+# manifest, service worker + workbox runtime, and icons (manifest.webmanifest,
+# sw.js, workbox-*.js, registerSW.js, icon-*.png, apple-touch-icon.png,
+# favicon.svg), plus the hashed /assets/*.js|css chunks — isn't handled by
+# any route above. Mounted LAST, after every API route, so a request only
+# reaches it once nothing above already matched — this was the actual PWA
+# install bug: manifest.webmanifest and sw.js were both 404ing, so Chrome
+# had nothing valid to base an install decision on. Guarded so a plain local
+# `uvicorn app.main:app` still starts before the frontend has ever been built.
+if WEB_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=WEB_DIR), name="web-root")

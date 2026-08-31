@@ -8,6 +8,7 @@ import FormatPicker from "./components/FormatPicker";
 import DestinationField from "./components/DestinationField";
 import DownloadButton from "./components/DownloadButton";
 import JobQueue from "./components/JobQueue";
+import { APP_VERSION } from "./version";
 
 const DEFAULT_MODES: Mode[] = ["best_video_audio", "best_audio", "best_video_only", "manual"];
 
@@ -241,6 +242,10 @@ export default function App() {
         <div id="jobs">
           <JobQueue jobs={jobs} onCancel={handleCancel} />
         </div>
+      </div>
+
+      <div className="muted" style={{ textAlign: "center", marginTop: 4 }}>
+        {APP_VERSION}
       </div>
     </div>
   );
