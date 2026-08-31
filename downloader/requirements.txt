@@ -9,3 +9,10 @@ mutagen
 # impersonated browser TLS fingerprints (the Python equivalent of the
 # curl-impersonate binaries the upstream ani-cli shell script relies on)
 curl_cffi
+# nyaa(tor) plugin: nyaa.si has no official API, nyaapy scrapes its
+# HTML/RSS instead — small, sporadically maintained, treat as fragile
+# (breaks silently if nyaa.si changes its markup; see torrent_providers.py)
+nyaapy
+# nyaa(tor) plugin: talks to the qbittorrent-nox process this app starts
+# on demand (see services/torrent_client.py) over its local WebUI API
+qbittorrent-api
