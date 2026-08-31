@@ -15,6 +15,18 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "autoUpdate",
+      // The manifest sits behind Cloudflare Access (dl.argusao.dev requires
+      // login). By default browsers fetch <link rel="manifest"> WITHOUT
+      // cookies, so an authenticated visitor still gets Access's login page
+      // back instead of JSON when Chrome checks installability — which
+      // silently fails the manifest check and hides "Install app" even
+      // though the page itself loaded fine (top-level navigation always
+      // sends cookies; this <link> fetch doesn't, unless told to). This
+      // adds crossorigin="use-credentials" to the injected manifest link so
+      // the CF_Authorization cookie goes along with it. Harmless if Access
+      // isn't actually enabled yet — same-origin credentialed fetches don't
+      // require the target to care about cookies.
+      useCredentials: true,
       manifest: {
         name: "JELLY-dl",
         short_name: "JELLY-dl",
