@@ -187,7 +187,7 @@ export default function App() {
   return (
     <div className="wrap">
       <h1>
-        <span className="dot" />
+        <img src="/logo.png" alt="" className="h1-icon" />
         Downloader
       </h1>
 

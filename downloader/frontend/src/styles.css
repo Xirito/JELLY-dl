@@ -35,11 +35,11 @@ h1 {
   align-items: center;
   gap: 10px;
 }
-h1 .dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--accent);
+h1 .h1-icon {
+  width: 26px;
+  height: 26px;
+  object-fit: contain;
+  flex: 0 0 auto;
 }
 .card {
   background: var(--panel);
