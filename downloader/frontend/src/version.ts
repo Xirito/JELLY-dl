@@ -5,4 +5,4 @@
 //
 // Convention: v1.<total commit count on the repo>, e.g. `git rev-list
 // --count HEAD` == 13 -> "v1.13".
-export const APP_VERSION = "v1.20";
+export const APP_VERSION = "v1.21";
