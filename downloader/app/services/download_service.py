@@ -8,6 +8,7 @@ from collections import OrderedDict
 from ..models import (
     DownloadProgress,
     DownloadRequest,
+    DownloadResult,
     JobInfo,
     JobStatus,
 )
@@ -99,8 +100,19 @@ class DownloadService:
                 if j:
                     j.title = title
 
-        result = dl.download(req.source, req.format_selector, dest, on_progress,
-                             req.options, should_cancel=event.is_set)
+        # Every well-behaved plugin already catches its own exceptions and
+        # returns a DownloadResult(error=...) — but this thread has nothing
+        # else catching for it, and a plugin bug that raises past that
+        # would otherwise kill this daemon thread silently (Python just
+        # logs it to stderr), leaving the job stuck at "running" (or
+        # "cancelling", if a cancel had already been requested) forever
+        # with no way to ever resolve it. This is the last line of defense
+        # so that can never happen, for this or any future plugin.
+        try:
+            result = dl.download(req.source, req.format_selector, dest, on_progress,
+                                 req.options, should_cancel=event.is_set)
+        except Exception as e:
+            result = DownloadResult(error=str(e)[:2000])
 
         with self._lock:
             j = self._jobs.get(job_id)

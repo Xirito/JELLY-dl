@@ -73,6 +73,12 @@ class TorrentClientError(RuntimeError):
     pass
 
 
+class _StartCancelled(Exception):
+    """Internal only — signals that acquire() was cancelled while
+    qbittorrent-nox was still starting up. Never escapes this module; see
+    download()."""
+
+
 def _b64(data: bytes) -> str:
     return base64.b64encode(data).decode("ascii")
 
@@ -110,6 +116,25 @@ class TorrentClientManager:
     def _ensure_conf(self) -> None:
         self.profile_dir.mkdir(parents=True, exist_ok=True)
 
+        secret_path = self.profile_dir / "webui-secret"
+        conf_path = self.profile_dir / "qBittorrent" / "config" / "qBittorrent.conf"
+
+        # qBittorrent only ever reads WebUI settings as "WebUI\<Key>" lines
+        # under the "[Preferences]" section of qBittorrent.conf — an
+        # earlier version of this file wrote them under a bare "[WebUI]"
+        # section instead, which qBittorrent silently ignores entirely.
+        # That meant every deploy of that version had NO working seeded
+        # login at all: qBittorrent fell back to its own random first-run
+        # password (never captured, since stdout is discarded), so every
+        # auth_log_in() attempt below failed, every time, forever — the
+        # torrent backend never actually worked. Detect that broken shape
+        # here and self-heal it, rather than requiring anyone to manually
+        # wipe the profile directory to pick up the fix.
+        needs_bootstrap = True
+        if conf_path.exists():
+            existing = conf_path.read_text(errors="ignore")
+            needs_bootstrap = "WebUI\\Password_PBKDF2" not in existing
+
         # The WebUI login password has to stay the same across container
         # restarts (a fresh TorrentClientManager picks a new random one in
         # __init__ every time), but the *hash* qBittorrent checks it
@@ -121,8 +146,7 @@ class TorrentClientManager:
         # same password qBittorrent's conf was originally seeded with,
         # login keeps working forever without ever touching that conf
         # again.
-        secret_path = self.profile_dir / "webui-secret"
-        if secret_path.exists():
+        if secret_path.exists() and not needs_bootstrap:
             self._password = secret_path.read_text().strip()
         else:
             secret_path.write_text(self._password)
@@ -131,23 +155,30 @@ class TorrentClientManager:
             except OSError:
                 pass  # best-effort; wrong permissions here isn't fatal
 
-        conf_path = self.profile_dir / "qBittorrent" / "config" / "qBittorrent.conf"
-        if conf_path.exists():
-            return  # already bootstrapped — its password hash already
-                     # matches self._password via the secret file above
+        if not needs_bootstrap:
+            return  # already correctly bootstrapped — its password hash
+                     # already matches self._password via the secret file
         conf_path.parent.mkdir(parents=True, exist_ok=True)
         conf_path.write_text(
-            "[WebUI]\n"
-            f"Username={self._username}\n"
-            f'Password_PBKDF2="{_pbkdf2_value(self._password)}"\n'
-            "Address=127.0.0.1\n"
-            "HostHeaderValidation=false\n"
+            "[Preferences]\n"
+            f"WebUI\\Username={self._username}\n"
+            f'WebUI\\Password_PBKDF2="{_pbkdf2_value(self._password)}"\n'
+            "WebUI\\Address=127.0.0.1\n"
+            "WebUI\\HostHeaderValidation=false\n"
+            # Our own client only ever connects from 127.0.0.1 anyway (the
+            # WebUI is never published) — bypassing auth for localhost is
+            # a second, independent path to a working login even if the
+            # PBKDF2 hash above is ever wrong again, and it sidesteps
+            # qBittorrent's failed-login IP ban entirely.
+            "WebUI\\LocalHostAuth=false\n"
         )
 
-    def _wait_ready(self) -> None:
+    def _wait_ready(self, should_cancel: Callable[[], bool] | None = None) -> None:
         deadline = time.monotonic() + _STARTUP_TIMEOUT_S
         last_err: Exception | None = None
         while time.monotonic() < deadline:
+            if should_cancel and should_cancel():
+                raise _StartCancelled()
             if self._proc.poll() is not None:
                 raise TorrentClientError(
                     f"qbittorrent-nox exited during startup (code {self._proc.returncode})"
@@ -165,7 +196,7 @@ class TorrentClientManager:
                 time.sleep(0.5)
         raise TorrentClientError(f"qbittorrent-nox never became ready: {last_err}")
 
-    def _start_locked(self) -> None:
+    def _start_locked(self, should_cancel: Callable[[], bool] | None = None) -> None:
         if self._proc is not None:
             return
         binary = shutil.which("qbittorrent-nox")
@@ -187,7 +218,7 @@ class TorrentClientManager:
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env,
         )
         try:
-            self._wait_ready()
+            self._wait_ready(should_cancel)
         except Exception:
             self._kill_locked()
             raise
@@ -205,12 +236,15 @@ class TorrentClientManager:
             proc.wait(timeout=5)
 
     # -- ref-counted start/stop -----------------------------------------
-    def acquire(self) -> qbittorrentapi.Client:
+    def acquire(self, should_cancel: Callable[[], bool] | None = None) -> qbittorrentapi.Client:
         """Call once per torrent job, before adding anything. Starts the
         client on the first caller; every later caller shares that same
-        instance until the last of them releases it."""
+        instance until the last of them releases it. should_cancel is
+        polled during the (up to _STARTUP_TIMEOUT_S) startup wait so a
+        Cancel click isn't stuck behind a slow qbittorrent-nox boot —
+        raises _StartCancelled rather than blocking to the full timeout."""
         with self._lock:
-            self._start_locked()
+            self._start_locked(should_cancel)
             self._active += 1
             return self._client
 
@@ -237,10 +271,30 @@ class TorrentClientManager:
         the app is DownloadProgress. The plugin wraps this into
         DownloadResult itself."""
         destination.mkdir(parents=True, exist_ok=True)
-        client = self.acquire()
+
+        # Deliberately separate from the try/finally below: release() must
+        # only ever run once acquire() has actually succeeded (incrementing
+        # _active) — calling it after a failed acquire would either
+        # double-release someone else's still-active session or tear down
+        # a client that was never actually acquired. Previously this call
+        # sat outside any try/except at all, so a startup failure here
+        # (qbittorrent-nox never becoming ready, wrong credentials, missing
+        # binary) raised straight out of download() uncaught — DownloadService
+        # runs this in a bare daemon thread with nothing catching that, so
+        # the thread just died silently and the job stayed stuck at
+        # "running"/"cancelling" forever with no way to cancel it.
+        try:
+            client = self.acquire(should_cancel)
+        except _StartCancelled:
+            return None, "cancelled by user"
+        except TorrentClientError as e:
+            return None, str(e)
+        except Exception as e:  # noqa: BLE001
+            return None, str(e)[:2000]
+
         torrent_hash: str | None = None
         try:
-            client.torrents_add(
+            add_result = client.torrents_add(
                 urls=magnet,
                 save_path=str(destination),
                 use_auto_torrent_management=False,
@@ -250,6 +304,16 @@ class TorrentClientManager:
                 share_limit_action="Stop",
                 upload_limit=1,  # ~0 B/s — leech only, see module docstring
             )
+            # Older qBittorrent (pre Web API v2.14.0 — e.g. the 4.5.x this
+            # ships against) answers /torrents/add with a literal "Ok."/
+            # "Fails." body rather than raising an HTTP error on failure
+            # (bad magnet, disk full, etc). Catch that immediately instead
+            # of silently waiting out the full _await_added() timeout below
+            # for a torrent that was never actually added.
+            if isinstance(add_result, str) and add_result.strip().rstrip(".").lower() == "fails":
+                raise TorrentClientError(
+                    "qBittorrent rejected the magnet link (add failed)"
+                )
             torrent_hash = self._await_added(client, job_tag, should_cancel)
             if torrent_hash is None:
                 return None, "cancelled by user"
