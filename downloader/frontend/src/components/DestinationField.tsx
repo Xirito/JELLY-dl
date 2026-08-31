@@ -76,38 +76,18 @@ export default function DestinationField({
         )}
       </div>
       {showMetaToggle && (
-        <div style={{ marginTop: 10 }}>
-          <label
-            style={{
-              display: "flex",
-              gap: 8,
-              alignItems: "center",
-              textTransform: "none",
-              letterSpacing: 0,
-              fontSize: 14,
-              color: "var(--text)",
-              cursor: "pointer",
-            }}
-          >
+        <div style={{ marginTop: 6 }}>
+          {/* .check-row (styles.css) sizes this to a ~44px tap target and
+              enlarges the checkbox itself for comfortable mobile tapping. */}
+          <label className="check-row">
             <input type="checkbox" checked={embedMeta} onChange={(e) => onEmbedMetaChange(e.target.checked)} />
             Embed metadata (title, artist, date, chapters)
           </label>
         </div>
       )}
       {showDubToggle && (
-        <div style={{ marginTop: 10 }}>
-          <label
-            style={{
-              display: "flex",
-              gap: 8,
-              alignItems: "center",
-              textTransform: "none",
-              letterSpacing: 0,
-              fontSize: 14,
-              color: "var(--text)",
-              cursor: "pointer",
-            }}
-          >
+        <div style={{ marginTop: 6 }}>
+          <label className="check-row">
             <input type="checkbox" checked={dub} onChange={(e) => onDubChange(e.target.checked)} />
             Dubbed (English audio) — default is subbed
           </label>

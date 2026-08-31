@@ -21,7 +21,12 @@ body {
 .wrap {
   max-width: 880px;
   margin: 0 auto;
-  padding: 24px 16px 80px;
+  /* env(safe-area-inset-*) only has an effect once index.html sets
+     viewport-fit=cover; the max()/plus-fallback keeps normal browser tabs
+     (where the inset is 0) at the original spacing. Clears the status bar
+     and gesture bar when installed as a standalone PWA on a phone. */
+  padding: max(24px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(80px, calc(env(safe-area-inset-bottom) + 24px))
+    max(16px, env(safe-area-inset-left));
 }
 h1 {
   font-size: 20px;
@@ -59,7 +64,9 @@ select {
   border: 1px solid var(--line);
   background: var(--panel2);
   color: var(--text);
-  font-size: 15px;
+  /* 16px, not 15px: iOS Safari auto-zooms the page on focus for any input
+     with a computed font-size under 16px. No effect on Android/desktop. */
+  font-size: 16px;
   outline: none;
 }
 input[type="text"]:focus,
@@ -225,8 +232,31 @@ button:disabled {
   word-break: break-all;
 }
 .job .btn-cancel {
-  padding: 3px 10px;
-  font-size: 12px;
+  /* Roughly a 44px tap target (min-height + padding), up from the original
+     3px/12px desktop-mouse sizing which is too small to reliably tap. */
+  padding: 10px 14px;
+  min-height: 44px;
+  font-size: 13px;
   border-radius: 6px;
   flex: 0 0 auto;
+}
+
+.check-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 14px;
+  color: var(--text);
+  cursor: pointer;
+  min-height: 44px;
+  padding: 6px 0;
+}
+
+.check-row input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  accent-color: var(--accent);
 }
