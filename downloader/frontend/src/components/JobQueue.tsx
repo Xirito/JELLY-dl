@@ -31,6 +31,13 @@ export default function JobQueue({ jobs, onCancel }: JobQueueProps) {
         const size = p.downloaded_bytes
           ? fmtSize(p.downloaded_bytes) + (p.total_bytes ? " / " + fmtSize(p.total_bytes) : "")
           : "";
+        // Torrent-only debug info -- unset for yt-dlp/ani-cli jobs. state is
+        // qBittorrent's own raw status word (e.g. "stalledDL", "metaDL"),
+        // shown so a job stuck at 0% is diagnosable instead of just saying
+        // "running".
+        const peers =
+          p.seeders != null || p.leechers != null ? `${p.seeders ?? 0}↑ ${p.leechers ?? 0}↓` : "";
+        const torrentState = p.state || "";
         const cancellable = j.status === "queued" || j.status === "running";
         const cancelling = p.status === "cancelling" || cancellingLocal.has(j.id);
         const statusLabel = cancelling ? "cancelling…" : j.status;
@@ -56,6 +63,8 @@ export default function JobQueue({ jobs, onCancel }: JobQueueProps) {
               {size ? " · " + size : ""}
               {speed ? " · " + speed : ""}
               {eta ? " · " + eta : ""}
+              {torrentState ? " · " + torrentState : ""}
+              {peers ? " · " + peers : ""}
             </div>
             <div className="bar">
               <i style={{ width: `${pct}%`, background: j.status === "error" ? "var(--err)" : undefined }} />

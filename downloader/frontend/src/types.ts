@@ -67,6 +67,14 @@ export interface DownloadProgress {
   total_bytes?: number | null;
   filename?: string | null;
   status?: string | null; // e.g. "cancelling"
+  // Torrent-only debug fields (nyaa_tor backend) -- unset for yt-dlp/ani-cli.
+  // seeders/leechers are peers connected right now (not swarm totals);
+  // state is qBittorrent's own raw state string (e.g. "downloading",
+  // "stalledDL", "metaDL", "checkingResumeData") -- surfaced so a stalled
+  // job is diagnosable from the queue instead of just showing "running".
+  seeders?: number | null;
+  leechers?: number | null;
+  state?: string | null;
 }
 
 export interface JobInfo {

@@ -1,6 +1,7 @@
 """API layer — thin FastAPI routes, DTO-only, delegates to services."""
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -13,6 +14,19 @@ from .registry import build_default_registry
 from .services.directory_browser import DirectoryBrowser
 from .services.download_service import DownloadService
 from .services.path_resolver import PathEscapeError, PathResolver
+
+# uvicorn configures its own "uvicorn"/"uvicorn.error"/"uvicorn.access"
+# loggers but never touches the root logger — without this, every
+# log.info()/log.warning() this app makes (notifier.py, torrent_client.py)
+# has no handler anywhere and is silently dropped, never reaching
+# `docker logs`. This must run before those modules log anything, which
+# just means before the app starts serving (module import order doesn't
+# matter — getLogger() doesn't check for handlers until something is
+# actually logged).
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
 app = FastAPI(title="Downloader", version="0.1.0")
 

@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 import os
 import secrets
 import shutil
@@ -52,11 +53,14 @@ import qbittorrentapi
 
 from ..models import DownloadProgress
 
+log = logging.getLogger("torrent_client")
+
 _WEBUI_PORT = 18080
 _HOST = "127.0.0.1"
 _STARTUP_TIMEOUT_S = 30
 _ADD_TIMEOUT_S = 20
 _POLL_INTERVAL_S = 2
+_LOG_HEARTBEAT_S = 15  # re-log an unchanged poll state at most this often
 _NO_ETA = 8_640_000  # qBittorrent's sentinel for "unknown/infinite" eta
 
 # *UP states mean "finished downloading, now (or about to be) uploading" —
@@ -174,12 +178,16 @@ class TorrentClientManager:
         )
 
     def _wait_ready(self, should_cancel: Callable[[], bool] | None = None) -> None:
-        deadline = time.monotonic() + _STARTUP_TIMEOUT_S
+        started = time.monotonic()
+        deadline = started + _STARTUP_TIMEOUT_S
         last_err: Exception | None = None
+        attempt = 0
         while time.monotonic() < deadline:
             if should_cancel and should_cancel():
+                log.info("qbittorrent-nox startup: cancelled after %d login attempt(s)", attempt)
                 raise _StartCancelled()
             if self._proc.poll() is not None:
+                log.error("qbittorrent-nox exited during startup (code %s)", self._proc.returncode)
                 raise TorrentClientError(
                     f"qbittorrent-nox exited during startup (code {self._proc.returncode})"
                 )
@@ -190,10 +198,27 @@ class TorrentClientManager:
                 )
                 client.auth_log_in()
                 self._client = client
+                log.info(
+                    "qbittorrent-nox ready on port %s after %.1fs (%d login attempt(s))",
+                    self.port, time.monotonic() - started, attempt + 1,
+                )
                 return
             except Exception as e:  # noqa: BLE001 — still booting, keep polling
+                attempt += 1
+                if isinstance(e, qbittorrentapi.Forbidden403Error):
+                    # Not "still booting" — either a wrong/unread WebUI
+                    # password or qBittorrent's own failed-login IP ban.
+                    # Worth flagging loudly since it usually means the
+                    # seeded credentials silently didn't take.
+                    log.warning(
+                        "qbittorrent-nox login attempt %d: 403 Forbidden (banned or "
+                        "credentials not applied) — %s", attempt, e,
+                    )
+                elif attempt == 1 or attempt % 10 == 0:
+                    log.debug("qbittorrent-nox login attempt %d still failing: %s", attempt, e)
                 last_err = e
                 time.sleep(0.5)
+        log.error("qbittorrent-nox never became ready after %ss: %s", _STARTUP_TIMEOUT_S, last_err)
         raise TorrentClientError(f"qbittorrent-nox never became ready: {last_err}")
 
     def _start_locked(self, should_cancel: Callable[[], bool] | None = None) -> None:
@@ -201,6 +226,7 @@ class TorrentClientManager:
             return
         binary = shutil.which("qbittorrent-nox")
         if not binary:
+            log.error("qbittorrent-nox binary not found on PATH")
             raise TorrentClientError(
                 "qbittorrent-nox is not installed in this image — "
                 "the torrent backend can't run without it"
@@ -208,6 +234,7 @@ class TorrentClientManager:
         self._ensure_conf()
         env = dict(os.environ)
         env["HOME"] = str(self.profile_dir)
+        log.info("starting qbittorrent-nox (profile=%s, port=%s)", self.profile_dir, self.port)
         self._proc = subprocess.Popen(
             [
                 binary,
@@ -220,6 +247,7 @@ class TorrentClientManager:
         try:
             self._wait_ready(should_cancel)
         except Exception:
+            log.warning("qbittorrent-nox startup failed — tearing it back down")
             self._kill_locked()
             raise
 
@@ -228,10 +256,12 @@ class TorrentClientManager:
         proc, self._proc = self._proc, None
         if proc is None:
             return
+        log.info("stopping qbittorrent-nox (pid=%s)", proc.pid)
         proc.terminate()  # SIGTERM — lets it flush fastresume data; never kill() first
         try:
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
+            log.warning("qbittorrent-nox didn't exit within 10s of SIGTERM — killing it")
             proc.kill()
             proc.wait(timeout=5)
 
@@ -271,6 +301,7 @@ class TorrentClientManager:
         the app is DownloadProgress. The plugin wraps this into
         DownloadResult itself."""
         destination.mkdir(parents=True, exist_ok=True)
+        log.info("torrent job %s: queued — magnet=%.80s…", job_tag, magnet)
 
         # Deliberately separate from the try/finally below: release() must
         # only ever run once acquire() has actually succeeded (incrementing
@@ -286,10 +317,13 @@ class TorrentClientManager:
         try:
             client = self.acquire(should_cancel)
         except _StartCancelled:
+            log.info("torrent job %s: cancelled while qbittorrent-nox was starting", job_tag)
             return None, "cancelled by user"
         except TorrentClientError as e:
+            log.error("torrent job %s: qbittorrent-nox failed to start: %s", job_tag, e)
             return None, str(e)
         except Exception as e:  # noqa: BLE001
+            log.exception("torrent job %s: unexpected error acquiring the torrent client", job_tag)
             return None, str(e)[:2000]
 
         torrent_hash: str | None = None
@@ -304,6 +338,7 @@ class TorrentClientManager:
                 share_limit_action="Stop",
                 upload_limit=1,  # ~0 B/s — leech only, see module docstring
             )
+            log.info("torrent job %s: qBittorrent add response=%r", job_tag, add_result)
             # Older qBittorrent (pre Web API v2.14.0 — e.g. the 4.5.x this
             # ships against) answers /torrents/add with a literal "Ok."/
             # "Fails." body rather than raising an HTTP error on failure
@@ -326,10 +361,16 @@ class TorrentClientManager:
                 # whatever it downloaded stays on disk.
                 self._forget(client, torrent_hash, delete_files=False)
                 torrent_hash = None
+            if error:
+                log.warning("torrent job %s: finished with error: %s", job_tag, error)
+            else:
+                log.info("torrent job %s: finished OK -> %s", job_tag, filepath)
             return filepath, error
         except TorrentClientError as e:
+            log.error("torrent job %s: %s", job_tag, e)
             return None, str(e)
         except Exception as e:  # surfaced to the job store, mirrors the other plugins
+            log.exception("torrent job %s: unexpected error", job_tag)
             return None, str(e)[:2000]
         finally:
             self.release()
@@ -345,11 +386,15 @@ class TorrentClientManager:
         deadline = time.monotonic() + _ADD_TIMEOUT_S
         while time.monotonic() < deadline:
             if should_cancel and should_cancel():
+                log.info("torrent add (%s): cancelled before qBittorrent registered it", job_tag)
                 return None
             info = client.torrents_info(tag=job_tag)
             if info:
+                log.info("torrent add (%s): registered as hash=%s", job_tag, info[0].hash[:12])
                 return info[0].hash
             time.sleep(0.5)
+        log.error("torrent add (%s): qBittorrent never registered the torrent (%ss timeout)",
+                   job_tag, _ADD_TIMEOUT_S)
         raise TorrentClientError(
             "qBittorrent never registered the new torrent (magnet may be invalid or dead)"
         )
@@ -359,21 +404,45 @@ class TorrentClientManager:
         on_progress: Callable[[DownloadProgress], None],
         should_cancel: Callable[[], bool] | None,
     ) -> tuple[str | None, str | None]:
+        short_hash = torrent_hash[:12]
+        last_logged_state: str | None = None
+        last_heartbeat = 0.0
         while True:
             if should_cancel and should_cancel():
+                log.info("torrent %s: cancelled by user, removing", short_hash)
                 self._forget(client, torrent_hash, delete_files=True)
                 return None, "cancelled by user"
 
             info = client.torrents_info(torrent_hashes=torrent_hash)
             if not info:
+                log.warning("torrent %s: disappeared from qBittorrent", short_hash)
                 return None, "torrent disappeared from qBittorrent"
             t = info[0]
             state = str(t.state)
+            seeders = int(t.num_seeds) if t.num_seeds is not None else None
+            leechers = int(t.num_leechs) if t.num_leechs is not None else None
+            progress = float(t.progress or 0)
+
+            # Log every state change immediately (the interesting bit for
+            # a stuck/no-progress job — e.g. stuck in "metaDL" means it
+            # never got the torrent's metadata, "stalledDL" means zero
+            # useful peers), and otherwise re-log a heartbeat at most every
+            # _LOG_HEARTBEAT_S so an unchanged-but-genuinely-still-running
+            # download doesn't go completely silent in the logs.
+            now = time.monotonic()
+            if state != last_logged_state or now - last_heartbeat > _LOG_HEARTBEAT_S:
+                log.info(
+                    "torrent %s: state=%s seeds=%s leechs=%s progress=%.1f%% dl_speed=%sB/s",
+                    short_hash, state, seeders, leechers, progress * 100, int(t.dlspeed or 0),
+                )
+                last_logged_state = state
+                last_heartbeat = now
+
             if state in _ERROR_STATES:
+                log.error("torrent %s: qBittorrent reported an error state: %s", short_hash, state)
                 return None, f"qBittorrent reported an error (state: {state})"
 
             eta = t.eta if t.eta is not None and 0 <= t.eta < _NO_ETA else None
-            progress = float(t.progress or 0)
             on_progress(DownloadProgress(
                 status="downloading",
                 downloaded_bytes=int(t.downloaded or 0),
@@ -382,9 +451,13 @@ class TorrentClientManager:
                 eta_s=float(eta) if eta is not None else None,
                 filename=t.name or None,
                 percent=round(progress * 100, 1),
+                seeders=seeders,
+                leechers=leechers,
+                state=state,
             ))
 
             if state in _DONE_STATES or progress >= 1.0:
+                log.info("torrent %s: download complete (state=%s)", short_hash, state)
                 try:
                     # Defense-in-depth stop — see module docstring. The
                     # ratio_limit=0 share-limit action should already have

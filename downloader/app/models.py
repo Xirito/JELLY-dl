@@ -96,6 +96,15 @@ class DownloadProgress(BaseModel):
     eta_s: Optional[float] = None
     filename: Optional[str] = None
     percent: Optional[float] = None
+    # Torrent-only debug fields (nyaa_tor_plugin.py / torrent_client.py) —
+    # left unset by yt-dlp/ani-cli. seeders/leechers are peers *connected
+    # to us right now* (not swarm totals), and state is qBittorrent's own
+    # raw state string (e.g. "downloading", "stalledDL", "metaDL",
+    # "checkingResumeData") — surfaced so a stalled/no-progress job is
+    # diagnosable from the queue itself instead of a bare "running".
+    seeders: Optional[int] = None
+    leechers: Optional[int] = None
+    state: Optional[str] = None
 
 
 class DownloadResult(BaseModel):

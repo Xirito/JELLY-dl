@@ -11,6 +11,21 @@ export function useJobPolling(intervalMs = 1500) {
     try {
       const j = await api<JobInfo[]>("/downloads");
       setJobs(j);
+      // Debug visibility for torrent jobs — seeders/leechers and
+      // qBittorrent's raw state aren't shown anywhere else in the UI
+      // beyond the queue's one-line summary. Open devtools while a
+      // torrent job is running to see exactly what the backend is seeing
+      // each poll (e.g. stuck at state=stalledDL with 0 seeders means the
+      // torrent has no usable peers — not a bug in this app).
+      for (const job of j) {
+        if (job.progress?.state) {
+          console.log(
+            `[jelly-dl] job ${job.id} (${job.status}): state=${job.progress.state} ` +
+              `seeds=${job.progress.seeders ?? "?"} leechs=${job.progress.leechers ?? "?"} ` +
+              `${job.progress.percent ?? 0}% ${job.progress.speed_bps ?? 0} B/s`
+          );
+        }
+      }
     } catch {
       // ignore — try again next tick
     }
