@@ -5,3 +5,9 @@ __pycache__/
 jellyfin/config/
 jellyfin/cache/
 *.log
+
+# React frontend (downloader/frontend/) — built by Docker's multi-stage
+# build; app/web/ is generated output, not source. See downloader/Dockerfile.
+downloader/frontend/node_modules/
+downloader/frontend/dist/
+downloader/app/web/

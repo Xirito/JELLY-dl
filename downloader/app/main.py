@@ -5,6 +5,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from .config import MEDIA_SERVER_TARGETS
 from .models import DownloadRequest, DownloaderInfo, JobInfo
@@ -21,6 +22,13 @@ browser = DirectoryBrowser(resolver)
 service = DownloadService(registry, resolver)
 
 WEB_DIR = Path(__file__).parent / "web"
+
+# Populated by the frontend's Vite build (see downloader/Dockerfile) —
+# hashed JS/CSS chunks the built index.html references as /assets/*.
+# Guarded so a plain local `uvicorn app.main:app` still starts before
+# the frontend has ever been built.
+if (WEB_DIR / "assets").is_dir():
+    app.mount("/assets", StaticFiles(directory=WEB_DIR / "assets"), name="assets")
 
 
 @app.get("/")
