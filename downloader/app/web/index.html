@@ -238,7 +238,12 @@ function renderResults(rs, opts){
     if(el.dataset.container === "1"){
       // Remember the show's own title (not the episode's) before drilling in —
       // it's what picking any episode below should suggest a folder from.
+      // Auto-fill the destination right now too, not only on a later leaf
+      // click — otherwise "Download all episodes" can fire with an empty
+      // destination if the user drills in and hits bulk-download without
+      // ever clicking a single episode row first.
       currentShowTitle = decodeURIComponent(el.dataset.title);
+      maybeAutoFillDest();
       setMsg("loading…");
       try{
         const rs2 = await api(`/downloaders/${$("dl").value}/search?q=&parent=${encodeURIComponent(src)}`);
