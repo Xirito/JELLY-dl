@@ -22,9 +22,23 @@ Leech-only, three layers deep so there's no meaningful seeding window:
      the moment its next ratio check runs, which lands right as the
      download completes (0 bytes uploaded / >0 downloaded already
      satisfies a ratio>=0 threshold).
-  2. upload_limit is capped to ~0 B/s for the torrent's whole lifetime, so
-     even the brief window before (1) fires can't push any real amount of
-     data out.
+  2. upload_limit is capped low (_UPLOAD_LIMIT_BPS, currently 50 KiB/s) for
+     the torrent's whole lifetime, so even the brief window before (1)
+     fires can't push much real data out.
+     THIS MUST STAY NON-TRIVIALLY ABOVE ZERO. It was originally set to 1
+     (effectively 0 B/s) and that broke downloading entirely, not just
+     seeding: on this qBittorrent/libtorrent version, the upload-rate
+     limiter throttles the *entire* outbound side of the wire protocol on
+     a connection, not just piece uploads — interested/request messages,
+     keep-alives, and metadata-exchange traffic for magnet links all ride
+     the same outbound budget. Capped at ~0 B/s, peers would complete a
+     TCP handshake and then the connection just sat there forever: stuck
+     at state="metaDL", seeders=0, 0 B/s, even with DHT/UPnP/trackers all
+     healthy and the swarm itself fine (confirmed live: lifting one stuck
+     job's limit to unlimited took it from 0 seeders to 19 and 700+ KB/s
+     within ~10 seconds). 50 KiB/s is enough headroom for protocol
+     control traffic to never starve while still being a light leecher,
+     not a real seeder.
   3. Our own poll loop explicitly calls torrents_stop() the instant it
      observes the download finish, rather than trusting either of the
      above alone — then the torrent is removed from qBittorrent entirely
@@ -80,6 +94,9 @@ _WEBUI_PORT = 18080
 # and ideally forwarded on the router for good connectivity. See the
 # module docstring and _apply_network_prefs() below.
 _TORRENT_PORT = 45123
+# Leech-only upload cap — see the "THIS MUST STAY NON-TRIVIALLY ABOVE
+# ZERO" note in the module docstring before ever lowering this again.
+_UPLOAD_LIMIT_BPS = 51_200  # 50 KiB/s
 _HOST = "127.0.0.1"
 _STARTUP_TIMEOUT_S = 30
 _ADD_TIMEOUT_S = 20
@@ -396,7 +413,7 @@ class TorrentClientManager:
                 tags=[job_tag],
                 ratio_limit=0,
                 share_limit_action="Stop",
-                upload_limit=1,  # ~0 B/s — leech only, see module docstring
+                upload_limit=_UPLOAD_LIMIT_BPS,  # leech only, see module docstring
             )
             log.info("torrent job %s: qBittorrent add response=%r", job_tag, add_result)
             # Older qBittorrent (pre Web API v2.14.0 — e.g. the 4.5.x this

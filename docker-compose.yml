@@ -25,6 +25,13 @@ services:
     restart: unless-stopped
     ports:
       - "8790:8790"
+      # BitTorrent peer port for the nyaa plugin's qbittorrent-nox — must
+      # match _TORRENT_PORT in app/services/torrent_client.py. Also forward
+      # this port on the router to this box (UPnP can't punch through
+      # Docker's bridge network) or the client stays unreachable from the
+      # swarm: stuck in metaDL, seeds=0.
+      - "45123:45123/tcp"
+      - "45123:45123/udp"
     volumes:
       - /mnt/FA_1/media:/media
       - /mnt/FA_1/media/downloads:/downloads
