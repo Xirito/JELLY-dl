@@ -3,6 +3,7 @@ services:
     image: jellyfin/jellyfin:latest
     container_name: jellyfin
     restart: unless-stopped
+    user: "568:568"
     ports:
       - "8096:8096"
     volumes:
@@ -23,6 +24,7 @@ services:
     build: ./downloader
     container_name: downloader
     restart: unless-stopped
+    user: "568:568"
     ports:
       - "8790:8790"
       # BitTorrent peer port for the nyaa plugin's qbittorrent-nox — must
