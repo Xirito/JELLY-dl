@@ -16,13 +16,21 @@ IS the thing to download, nothing to pick after it.
 
 There's a separate, optional pre-search step layered on top of that flat
 search: anime_search()/anime_details() (capabilities.supports_anime_lookup)
-resolve a free-text anime name against anidb.app — same shared client
-ani-cli's plugin uses (services/anidb.py) — to an official title (plus
-romaji/synonyms, if anidb.app has them) and cover art, before the frontend
-composes the actual `search(query=...)` call above (typically as
-"[GroupTag] <chosen title>", though the release-group tag itself is a
-frontend-only concept — this file never sees or validates it, a torrent
-search here is just a query string like any other).
+resolve a free-text anime name against AniList's public GraphQL API
+(services/anilist.py) to an official title (plus romaji/synonyms) and
+cover art, before the frontend composes the actual `search(query=...)`
+call above (typically as "[GroupTag] <chosen title>", though the
+release-group tag itself is a frontend-only concept — this file never sees
+or validates it, a torrent search here is just a query string like any
+other).
+
+This used to go through anidb.app (services/anidb.py, still used by
+anicli_plugin.py) instead of AniList, but anidb.app sits behind Cloudflare
+bot-mitigation that intermittently blocks it outright -- and this lookup
+never actually needed anything anidb.app-specific in the first place, just
+a title + cover. AniList has no episode/stream data, though, so it can't
+replace anidb.app for anicli_plugin.py's actual downloads -- only this
+metadata pre-search step moved.
 """
 from __future__ import annotations
 
@@ -43,7 +51,7 @@ from ..models import (
     FormatSelector,
     SearchResult,
 )
-from ..services import anidb
+from ..services import anilist
 from ..services.torrent_client import TorrentClientManager
 from .torrent_providers import NyaaProvider, TorrentProvider
 
@@ -130,13 +138,13 @@ class NyaaTorDownloader:
             raise ValueError("search query is required")
         return [
             AnimeMatch(id=anime_id, title=title)
-            for anime_id, title in anidb.search_anime(query)[:20]
+            for anime_id, title in anilist.search_anime(query)[:20]
         ]
 
     def anime_details(self, anime_id: str) -> AnimeDetails:
-        detail = anidb.anime_detail(anime_id)
+        detail = anilist.anime_detail(anime_id)
         if detail is None:
-            raise anidb.AniDbError("couldn't load that anime's page")
+            raise anilist.AniListError("couldn't load that anime's page")
         variants = [detail.official]
         if detail.romaji and detail.romaji.lower() != detail.official.lower():
             variants.append(detail.romaji)
