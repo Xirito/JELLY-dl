@@ -27,9 +27,40 @@ freed of it here.
 """
 from __future__ import annotations
 
+import logging
+import threading
+import time
 from dataclasses import dataclass, field
 
 from curl_cffi import requests as curl_requests
+
+log = logging.getLogger(__name__)
+
+# Diagnostic-only, not correctness-critical -- a request number that's off
+# by one under concurrent searches doesn't matter, it's just so consecutive
+# log lines for the same request are easy to pair up ("request #7" /
+# "response #7") in `docker logs`, and so a run of numbers climbing fast
+# is itself a visible clue about request volume.
+_request_lock = threading.Lock()
+_request_count = 0
+
+
+def _next_request_num() -> int:
+    global _request_count
+    with _request_lock:
+        _request_count += 1
+        return _request_count
+
+
+# Headers worth logging by name when present: the X-RateLimit-* trio is
+# AniList's own documented quota signal (docs.anilist.co/guide/
+# rate-limiting) -- watching "remaining" trend down across requests is the
+# concrete evidence for or against "a burst of requests tripped a block",
+# rather than guessing from the outside. cf-ray, if present, confirms
+# Cloudflare specifically handled (or blocked) the request, as opposed to
+# AniList's own backend -- useful context if this ever needs reporting to
+# either of them.
+_LOG_HEADERS = ("x-ratelimit-limit", "x-ratelimit-remaining", "retry-after", "x-ratelimit-reset", "cf-ray")
 
 _API_URL = "https://graphql.anilist.co"
 # graphql.anilist.co sits behind Cloudflare too, and a request with no
@@ -85,6 +116,9 @@ class AniListError(RuntimeError):
 
 
 def _post(query: str, variables: dict, timeout: int = 15) -> dict:
+    n = _next_request_num()
+    log.info("AniList request #%d: %s", n, variables)
+    t0 = time.monotonic()
     resp = curl_requests.post(
         _API_URL,
         json={"query": query, "variables": variables},
@@ -92,13 +126,56 @@ def _post(query: str, variables: dict, timeout: int = 15) -> dict:
         impersonate=_IMPERSONATE,
         timeout=timeout,
     )
+    elapsed = time.monotonic() - t0
+    seen_headers = {h: resp.headers.get(h) for h in _LOG_HEADERS if resp.headers.get(h) is not None}
+    log.info(
+        "AniList response #%d: status=%d elapsed=%.2fs %s",
+        n, resp.status_code, elapsed, seen_headers or "(no rate-limit/cf-ray headers present)",
+    )
+    if resp.status_code >= 400:
+        # Full body + full headers, but only on failure and only at WARNING
+        # -- this is the one thing that actually tells apart "AniList's own
+        # JSON error", "Cloudflare's HTML challenge/block page", and
+        # "something else entirely", none of which look any different from
+        # the status code alone. Truncated: a Cloudflare block page can run
+        # several KB of inline CSS/JS that's noise here.
+        try:
+            body_preview = (resp.text or "")[:1500]
+        except Exception:
+            body_preview = "<unavailable>"
+        log.warning(
+            "AniList request #%d failed: status=%d headers=%s body=%r",
+            n, resp.status_code, dict(resp.headers), body_preview,
+        )
     if resp.status_code == 429:
         # AniList's own rate limit (see docs.anilist.co/guide/rate-limiting)
         # — a plain 503-style raise_for_status() would say "server error",
         # which is misleading for what's actually a client-side backoff
         # situation.
         raise AniListError("AniList rate-limited this request — try again in a moment")
-    resp.raise_for_status()
+    if resp.status_code == 403:
+        # Not the same thing as the missing-User-Agent 403 `impersonate`
+        # fixes (that one never reached here at all -- it was rejected
+        # before AniList's own app logic ever saw it). This 403 is AniList's
+        # documented behavior for its OWN abuse detection: "In very rare
+        # cases, AniList may block your IP address from accessing the API.
+        # This is usually due to a large number of requests being made from
+        # a single IP address." (docs.anilist.co/guide/considerations).
+        # Impersonating a browser can't prevent this -- it's IP-based, not
+        # header/fingerprint-based -- so surface it as what it is (a
+        # temporary block that clears on its own) rather than a bare "HTTP
+        # Error 403" that reads like something is broken here.
+        raise AniListError(
+            "AniList temporarily blocked this network (HTTP 403) — their "
+            "own anti-abuse system does this after a burst of requests from "
+            "one IP, not something wrong on this end. It should clear on "
+            "its own; avoid firing off repeated anime searches back-to-back "
+            "while it's in effect."
+        )
+    try:
+        resp.raise_for_status()
+    except Exception as e:
+        raise AniListError(f"AniList request failed: {e}") from e
     payload = resp.json()
     errors = payload.get("errors")
     if errors:
@@ -157,7 +234,14 @@ def anime_detail(media_id: str) -> AnimeDetail | None:
         return None
     try:
         data = _post(_DETAIL_QUERY, {"id": numeric_id})
-    except AniListError:
+    except AniListError as e:
+        # Unlike search_anime() (which lets this propagate up to the route
+        # handler's own error message), this one gets swallowed to None so
+        # nyaa_tor_plugin.py can raise its own "couldn't load that anime's
+        # page" -- which on its own gives zero clue WHY. Log it here so the
+        # real reason (rate limit, IP block, whatever) still shows up in
+        # `docker logs` instead of disappearing entirely.
+        log.warning("anime_detail(%s) failed: %s", media_id, e)
         return None
     media = data.get("Media")
     if not isinstance(media, dict):
