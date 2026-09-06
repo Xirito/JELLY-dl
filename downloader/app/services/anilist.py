@@ -32,6 +32,12 @@ from dataclasses import dataclass, field
 from curl_cffi import requests as curl_requests
 
 _API_URL = "https://graphql.anilist.co"
+# graphql.anilist.co sits behind Cloudflare too, and a request with no
+# User-Agent at all (curl_cffi's default when `impersonate` isn't set --
+# confirmed by inspection, it sends none) gets a flat 403 from it. Same
+# fix services/anidb.py already uses for the same reason: impersonate a
+# real browser's TLS/JA3 fingerprint + header set.
+_IMPERSONATE = "chrome124"
 
 # Page(media(search: ...)) rather than the singular `Media(search: ...)`
 # query — AniList's singular Media field accepts a search string too, but
@@ -83,6 +89,7 @@ def _post(query: str, variables: dict, timeout: int = 15) -> dict:
         _API_URL,
         json={"query": query, "variables": variables},
         headers={"Content-Type": "application/json", "Accept": "application/json"},
+        impersonate=_IMPERSONATE,
         timeout=timeout,
     )
     if resp.status_code == 429:
