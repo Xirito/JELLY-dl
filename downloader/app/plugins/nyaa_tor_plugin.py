@@ -52,7 +52,9 @@ that same backend, not back to AniList.
 from __future__ import annotations
 
 import logging
+import threading
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 from urllib.parse import parse_qs, urlparse
@@ -76,6 +78,14 @@ from .torrent_providers import NyaaProvider, TorrentProvider
 log = logging.getLogger(__name__)
 
 
+@dataclass
+class SearchProvider:
+    service: str
+    dta: object  # the anilist or mal module -- not an actual type, just needs is_configured()/anime_detail()
+    search: Callable[[str], list[tuple[str, str]]]
+    error: type[Exception]
+
+
 class NyaaTorDownloader:
     id = "nyaa_tor"
     name = "Nyaa (torrent)"
@@ -94,6 +104,23 @@ class NyaaTorDownloader:
         supports_anime_lookup=True,
     )
 
+    searchDB = [
+        {
+            "service": "anilist",
+            "dta": anilist,
+            "search": lambda query: anilist.search_anime(query),
+            "error": anilist.AniListError,
+        },
+        {
+            "service": "mal",
+            "dta": mal,
+            "search": lambda query: mal.search_anime(query),
+            "error": mal.MalError,
+        },
+    ]
+
+    search_providers: list[SearchProvider] = [SearchProvider(**db) for db in searchDB]
+
     def __init__(
         self,
         client: TorrentClientManager | None = None,
@@ -107,6 +134,18 @@ class NyaaTorDownloader:
         self.providers: list[TorrentProvider] = (
             providers if providers is not None else [NyaaProvider()]
         )
+        # Guards reads/writes of the class-level `search_providers` list.
+        # anime_search() below runs through FastAPI's threadpool (it's a
+        # plain `def`, not `async def`), and NyaaTorDownloader is a
+        # singleton (one instance, registered once in registry.py) shared
+        # by every request -- so two searches landing at the same moment
+        # (two tabs, a double-click, two different people) genuinely
+        # execute concurrently against the same list. Without this lock,
+        # one request's `.reverse()` can land mid-way through another
+        # request's read of `search_providers[0]`, producing a result
+        # tagged with the wrong backend's id prefix or an exception type
+        # that no longer matches what actually failed.
+        self._search_providers_lock = threading.Lock()
 
     # -- search --------------------------------------------------------
     def search(self, query: str, parent: str | None = None) -> list[SearchResult]:
@@ -152,24 +191,52 @@ class NyaaTorDownloader:
         return results
 
     # -- anime lookup (optional pre-search step, see module docstring) -------
+    def _provider_order(self) -> tuple[SearchProvider, SearchProvider]:
+        # One locked read, then everything below works off these two local
+        # references -- never re-reads self.search_providers[0]/[1] again
+        # for the rest of the call. That's what makes a concurrent
+        # _promote() from another request safe to ignore mid-call: this
+        # request's notion of "primary" and "fallback" can't change out
+        # from under it once it's captured them.
+        with self._search_providers_lock:
+            return self.search_providers[0], self.search_providers[1]
+
+    def _promote(self, provider: SearchProvider) -> None:
+        # Sticky failover: once `provider` has proven itself as the
+        # fallback, make it primary for future requests too, so the next
+        # search doesn't pay AniList's timeout again during an outage (see
+        # chat history for why this is deliberately sticky rather than
+        # per-request). Idempotent under concurrency -- if two requests hit
+        # a primary failure at the same moment, only the first to acquire
+        # the lock actually swaps; the second sees `provider` is already
+        # primary and no-ops, instead of swapping twice and landing back on
+        # the original (still-broken) order.
+        with self._search_providers_lock:
+            if self.search_providers[0] is not provider:
+                self.search_providers[0], self.search_providers[1] = (
+                    self.search_providers[1], self.search_providers[0],
+                )
+
     def anime_search(self, query: str) -> list[AnimeMatch]:
         query = (query or "").strip()
         if not query:
             raise ValueError("search query is required")
         errors: list[str] = []
+        primary, fallback = self._provider_order()
         try:
-            results = anilist.search_anime(query)
-            source = "anilist"
-        except anilist.AniListError as e:
-            errors.append(f"AniList: {e}")
-            if not mal.is_configured():
+            results = primary.search(query)
+            source = primary.service
+        except primary.error as e:
+            errors.append(f" {primary.service}: {e}")
+            if not fallback.dta.is_configured():
                 raise
-            log.warning("AniList search failed, falling back to MyAnimeList: %s", e)
+            log.warning("%s search failed, falling back to %s: %s", primary.service, fallback.service, e)
+            self._promote(fallback)
             try:
-                results = mal.search_anime(query)
-                source = "mal"
-            except mal.MalError as e2:
-                errors.append(f"MyAnimeList: {e2}")
+                results = fallback.search(query)
+                source = fallback.service
+            except fallback.error as e2:
+                errors.append(f" {fallback.service}: {e2}")
                 raise RuntimeError("; ".join(errors)) from e2
         return [
             AnimeMatch(id=f"{source}:{anime_id}", title=title)
@@ -181,6 +248,25 @@ class NyaaTorDownloader:
         # docstring) -- a result picked from a MyAnimeList fallback list
         # must not be looked up against AniList, and vice versa.
         source, sep, raw_id = anime_id.partition(":")
+        sprovider = next((sp for sp in self.search_providers if sp.service == source), None)
+        if not sprovider:
+            raise ValueError("unknown anime source")
+
+        detail = sprovider.dta.anime_detail(raw_id)
+        not_found = sprovider.error("couldn't load that anime's page")
+
+        if detail is None:
+            raise not_found
+        variants = [detail.official]
+        if detail.romaji and detail.romaji.lower() != detail.official.lower():
+            variants.append(detail.romaji)
+        for syn in detail.synonyms:
+            if syn and syn.lower() not in (v.lower() for v in variants):
+                variants.append(syn)
+        return AnimeDetails(title=detail.official, cover=detail.cover, title_variants=variants)
+
+
+        # rewrite the logic to use the search_providers list instead of hardcoding anilist and mal
         if sep and source == "mal":
             detail = mal.anime_detail(raw_id)
             not_found = mal.MalError("couldn't load that anime's page")

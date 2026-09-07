@@ -44,6 +44,8 @@ log = logging.getLogger(__name__)
 _request_lock = threading.Lock()
 _request_count = 0
 
+def is_configured() -> bool:
+    return True  # no auth or config needed for AniList's public GraphQL API
 
 def _next_request_num() -> int:
     global _request_count
