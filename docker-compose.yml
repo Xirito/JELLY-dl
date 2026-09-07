@@ -45,3 +45,33 @@ services:
       - NOTIFY_JELLYFIN_APIKEY=${JELLYFIN_API_KEY:-}
       # optional fallback anime-metadata source if AniList's API is down -- see services/mal.py
       - MAL_CLIENT_ID=${MAL_CLIENT_ID:-}
+  jellyfin-upscaler:
+    image: kuscheltier/jellyfin-ai-upscaler:docker7-converter
+    container_name: jellyfin-upscaler
+    environment:
+      # Set UPSCALER_API_TOKEN in .env (next to JELLYFIN_API_KEY); the
+      # AI Upscaler plugin inside Jellyfin must be given the same token.
+      # Defaults to "disable" (no auth) — acceptable only because 5000 is
+      # reachable from the LAN alone, never forwarded on the router.
+      - API_TOKEN=${UPSCALER_API_TOKEN:-disable}
+    volumes:
+      - ai-models:/app/models
+      - ai-config:/app/config
+    ports:
+      - "5000:5000"
+    restart: unless-stopped
+    # GTX 1050 Ti — same nvidia-container-toolkit path the jellyfin
+    # service already uses, so the GPU is shared by both containers.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+# Named volumes used by jellyfin-upscaler above. Compose refuses to start
+# ("refers to undefined volume") unless they're declared here.
+volumes:
+  ai-models:
+  ai-config:
