@@ -156,15 +156,36 @@ def _post(query: str, variables: dict, timeout: int = 15) -> dict:
     if resp.status_code == 403:
         # Not the same thing as the missing-User-Agent 403 `impersonate`
         # fixes (that one never reached here at all -- it was rejected
-        # before AniList's own app logic ever saw it). This 403 is AniList's
-        # documented behavior for its OWN abuse detection: "In very rare
-        # cases, AniList may block your IP address from accessing the API.
-        # This is usually due to a large number of requests being made from
-        # a single IP address." (docs.anilist.co/guide/considerations).
-        # Impersonating a browser can't prevent this -- it's IP-based, not
-        # header/fingerprint-based -- so surface it as what it is (a
-        # temporary block that clears on its own) rather than a bare "HTTP
-        # Error 403" that reads like something is broken here.
+        # before AniList's own app logic ever saw it). Two confirmed,
+        # distinguishable causes share this status code:
+        try:
+            body_text = resp.text or ""
+        except Exception:
+            body_text = ""
+        if "temporarily disabled" in body_text.lower():
+            # AniList's *entire* API taken down on their end -- confirmed
+            # live 2026-09-06 (their exact wording: "The AniList API has
+            # been temporarily disabled due to severe stability issues"),
+            # and the identical message is a known recurring AniList-side
+            # outage reported by unrelated projects, not anything specific
+            # to this app, this request, or this network. No amount of
+            # retrying, backing off, or authenticating changes this --
+            # it's off for everyone until AniList turns it back on.
+            raise AniListError(
+                "AniList's API is temporarily disabled on their end (their "
+                "own message: \"temporarily disabled due to severe "
+                "stability issues\") — a full outage, not specific to this "
+                "request. Nothing to fix here; wait for AniList or use a "
+                "fallback source."
+            )
+        # Otherwise: AniList's documented behavior for its OWN abuse
+        # detection: "In very rare cases, AniList may block your IP
+        # address from accessing the API. This is usually due to a large
+        # number of requests being made from a single IP address."
+        # (docs.anilist.co/guide/considerations). Impersonating a browser
+        # can't prevent this -- it's IP-based, not header/fingerprint-based
+        # -- so surface it as what it is (a temporary block that clears on
+        # its own) rather than a bare "HTTP Error 403".
         raise AniListError(
             "AniList temporarily blocked this network (HTTP 403) — their "
             "own anti-abuse system does this after a burst of requests from "

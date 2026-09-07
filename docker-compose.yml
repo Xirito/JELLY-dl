@@ -43,3 +43,5 @@ services:
       # library-refresh ping after each finished download landing under $jellyfin$
       - NOTIFY_JELLYFIN_URL=http://jellyfin:8096
       - NOTIFY_JELLYFIN_APIKEY=${JELLYFIN_API_KEY:-}
+      # optional fallback anime-metadata source if AniList's API is down -- see services/mal.py
+      - MAL_CLIENT_ID=${MAL_CLIENT_ID:-}

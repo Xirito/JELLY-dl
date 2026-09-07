@@ -31,9 +31,27 @@ never actually needed anything anidb.app-specific in the first place, just
 a title + cover. AniList has no episode/stream data, though, so it can't
 replace anidb.app for anicli_plugin.py's actual downloads -- only this
 metadata pre-search step moved.
+
+AniList itself turned out to have its own failure mode: their whole API
+can go down outage-wide on their end (confirmed live 2026-09-06, their
+own message: "temporarily disabled due to severe stability issues"), with
+no ETA and nothing fixable on this side. anime_search()/anime_details()
+below try AniList first and, only if that fails AND services/mal.py has a
+Client ID configured (mal.is_configured()), fall back to MyAnimeList's
+official API -- separate company, separate infrastructure, so an AniList
+outage doesn't take this down too. See services/mal.py's docstring for
+how to get a Client ID; without one set, this behaves exactly as before
+(AniList failures surface directly, no fallback attempted).
+
+Each AnimeMatch.id below carries a "anilist:" or "mal:" prefix so
+anime_details() knows which backend a given id came from -- the two
+services' ids are unrelated numbers in unrelated namespaces, and a search
+result picked from a fallback response has to route its detail lookup to
+that same backend, not back to AniList.
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from pathlib import Path
 from typing import Callable
@@ -51,9 +69,11 @@ from ..models import (
     FormatSelector,
     SearchResult,
 )
-from ..services import anilist
+from ..services import anilist, mal
 from ..services.torrent_client import TorrentClientManager
 from .torrent_providers import NyaaProvider, TorrentProvider
+
+log = logging.getLogger(__name__)
 
 
 class NyaaTorDownloader:
@@ -136,15 +156,42 @@ class NyaaTorDownloader:
         query = (query or "").strip()
         if not query:
             raise ValueError("search query is required")
+        errors: list[str] = []
+        try:
+            results = anilist.search_anime(query)
+            source = "anilist"
+        except anilist.AniListError as e:
+            errors.append(f"AniList: {e}")
+            if not mal.is_configured():
+                raise
+            log.warning("AniList search failed, falling back to MyAnimeList: %s", e)
+            try:
+                results = mal.search_anime(query)
+                source = "mal"
+            except mal.MalError as e2:
+                errors.append(f"MyAnimeList: {e2}")
+                raise RuntimeError("; ".join(errors)) from e2
         return [
-            AnimeMatch(id=anime_id, title=title)
-            for anime_id, title in anilist.search_anime(query)[:20]
+            AnimeMatch(id=f"{source}:{anime_id}", title=title)
+            for anime_id, title in results[:20]
         ]
 
     def anime_details(self, anime_id: str) -> AnimeDetails:
-        detail = anilist.anime_detail(anime_id)
+        # Route to whichever backend the id's prefix names (see module
+        # docstring) -- a result picked from a MyAnimeList fallback list
+        # must not be looked up against AniList, and vice versa.
+        source, sep, raw_id = anime_id.partition(":")
+        if sep and source == "mal":
+            detail = mal.anime_detail(raw_id)
+            not_found = mal.MalError("couldn't load that anime's page")
+        else:
+            # "anilist:" prefix, or no recognized prefix at all (defensive
+            # fallback for any id that predates this scheme) -- both go to
+            # AniList, same as before the fallback existed.
+            detail = anilist.anime_detail(raw_id if sep and source == "anilist" else anime_id)
+            not_found = anilist.AniListError("couldn't load that anime's page")
         if detail is None:
-            raise anilist.AniListError("couldn't load that anime's page")
+            raise not_found
         variants = [detail.official]
         if detail.romaji and detail.romaji.lower() != detail.official.lower():
             variants.append(detail.romaji)
