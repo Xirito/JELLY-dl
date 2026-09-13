@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
-import type { DownloaderInfo, FormatOption, MediaInterface, Mode } from "./types";
+import type { DownloaderInfo, FormatOption, MediaInterface, Mode, SeasonalSearchRequest } from "./types";
 import { useJobPolling } from "./hooks/useJobPolling";
 import BackendSelect from "./components/BackendSelect";
 import SearchPanel from "./components/SearchPanel";
 import AnimeTorrentPanel from "./components/AnimeTorrentPanel";
+import SeasonalCalendar from "./components/SeasonalCalendar";
 import FormatPicker from "./components/FormatPicker";
 import DestinationField from "./components/DestinationField";
 import DownloadButton from "./components/DownloadButton";
@@ -47,6 +48,27 @@ export default function App() {
     setMsgRaw(text);
     setMsgIsError(isError);
   }, []);
+
+  // "Search" from SeasonalCalendar's context menu -- forwarded to whichever
+  // anime-capable panel is mounted below (only one of AnimeTorrentPanel/
+  // SearchPanel renders at a time). Each panel decides for itself how to
+  // use it (an id-based lookup vs. a plain title search) -- see their own
+  // seasonalRequest effects. `token` is bumped on every pick, including a
+  // repeat pick of the same show, so the effect re-fires every time.
+  const [seasonalRequest, setSeasonalRequest] = useState<SeasonalSearchRequest | null>(null);
+  const seasonalTokenRef = useRef(0);
+  const handleSeasonalSearch = useCallback((show: { id: string; title: string }) => {
+    seasonalTokenRef.current += 1;
+    setSeasonalRequest({ token: seasonalTokenRef.current, id: show.id, title: show.title });
+  }, []);
+  // Cleared back to null by whichever panel's own seasonalRequest effect
+  // actually handles it. Without this, a request handled while (say)
+  // SearchPanel is mounted would still be sitting in state the next time
+  // AnimeTorrentPanel mounts fresh (switching backends) -- a brand-new
+  // mount's effect runs regardless of whether the token "changed" from
+  // some prior render, so a stale request would silently re-fire a second
+  // lookup the user never asked for just by switching backends afterward.
+  const clearSeasonalRequest = useCallback(() => setSeasonalRequest(null), []);
 
   const mediaTokens = useMemo(() => interfaces.map((i) => i.token), [interfaces]);
 
@@ -213,6 +235,8 @@ export default function App() {
           <ArrowVideo showControls={false} />
         )}
       </div>
+      <SeasonalCalendar onSearch={handleSeasonalSearch} />
+
       <div className="card">
         <BackendSelect downloaders={downloaders} value={downloaderId} onChange={setDownloaderId} />
         {caps?.supports_anime_lookup ? (
@@ -223,6 +247,8 @@ export default function App() {
             setPreviewThumbnail={setPreviewThumbnail}
             maybeAutoFillDest={maybeAutoFillDest}
             setMsg={setMsg}
+            seasonalRequest={seasonalRequest}
+            onSeasonalRequestHandled={clearSeasonalRequest}
           />
         ) : (
           <SearchPanel
@@ -240,6 +266,8 @@ export default function App() {
             dub={dub}
             setMsg={setMsg}
             refreshJobs={refreshJobs}
+            seasonalRequest={seasonalRequest}
+            onSeasonalRequestHandled={clearSeasonalRequest}
           />
         )}
       </div>

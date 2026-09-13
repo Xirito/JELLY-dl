@@ -56,6 +56,34 @@ class ProviderStatus(BaseModel):
     status: Literal["active", "standby", "down"]
 
 
+class SeasonalShow(BaseModel):
+    # A followed (or browsable) seasonal anime -- see services/seasonal.py.
+    # `id` is namespaced ("anilist:123" / "mal:456") exactly like
+    # NyaaTorDownloader's own anime ids (nyaa_tor_plugin.py), which is what
+    # lets the frontend hand this id straight to
+    # /downloaders/nyaa_tor/anime/{id} when the user picks "search" on a
+    # followed show, no extra lookup step needed.
+    id: str
+    title: str
+    cover: Optional[str] = None
+    # 0=Monday..6=Sunday, in the server's local timezone -- None means no
+    # currently-scheduled next episode (not yet airing, or fully aired).
+    day_of_week: Optional[int] = None
+    followed: bool = False
+
+
+class FollowShowRequest(BaseModel):
+    # Body for POST /seasonal/follow -- the frontend already has every one
+    # of these fields from the /seasonal/browse response it's rendering,
+    # so following never needs a second lookup back to AniList/MAL.
+    id: str
+    title: str
+    cover: Optional[str] = None
+    day_of_week: Optional[int] = None
+    season: str
+    year: int
+
+
 class SearchResult(BaseModel):
     source: str          # what to feed back into formats/download (usually a URL)
     title: str

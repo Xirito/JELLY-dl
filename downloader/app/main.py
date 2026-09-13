@@ -9,8 +9,12 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import MEDIA_SERVER_TARGETS
-from .models import AnimeDetails, AnimeMatch, DownloadRequest, DownloaderInfo, JobInfo, ProviderStatus
+from .models import (
+    AnimeDetails, AnimeMatch, DownloadRequest, DownloaderInfo, FollowShowRequest,
+    JobInfo, ProviderStatus, SeasonalShow,
+)
 from .registry import build_default_registry
+from .services import seasonal
 from .services.directory_browser import DirectoryBrowser
 from .services.download_service import DownloadService
 from .services.path_resolver import PathEscapeError, PathResolver
@@ -113,6 +117,53 @@ def provider_status(downloader_id: str):
     if not callable(fn):
         return []
     return fn()
+
+
+@app.get("/seasonal/current")
+def seasonal_current():
+    # Not tied to any downloader -- the seasonal calendar is shared by
+    # nyaa_tor and ani-cli both (see services/seasonal.py). Plain dict,
+    # same style as /interfaces below -- no response_model needed for a
+    # two-field shape nothing else reuses.
+    season, year = seasonal.current_season()
+    return {"season": season, "year": year}
+
+
+@app.get("/seasonal/adjacent")
+def seasonal_adjacent(season: str = Query(...), year: int = Query(...), delta: int = Query(...)):
+    # Backs the browse view's prev/next-season buttons -- keeps the
+    # WINTER->SPRING->SUMMER->FALL ordering and year rollover in one place
+    # (services/seasonal.py) instead of duplicating it in the frontend.
+    new_season, new_year = seasonal.adjacent_season(season, year, delta)
+    return {"season": new_season, "year": new_year}
+
+
+@app.get("/seasonal/browse", response_model=list[SeasonalShow])
+def seasonal_browse(season: str = Query(...), year: int = Query(...)):
+    try:
+        return seasonal.browse_season(season, year)
+    except seasonal.SeasonalError as e:
+        raise HTTPException(502, str(e))
+
+
+@app.get("/seasonal/followed", response_model=list[SeasonalShow])
+def seasonal_followed():
+    return seasonal.list_followed()
+
+
+@app.post("/seasonal/follow")
+def seasonal_follow(body: FollowShowRequest):
+    seasonal.follow(body.id, body.title, body.cover, body.day_of_week, body.season, body.year)
+    return {"ok": True}
+
+
+@app.delete("/seasonal/follow/{show_id}")
+def seasonal_unfollow(show_id: str):
+    # show_id is "anilist:123"/"mal:456" -- a plain path segment handles
+    # the colon fine (same as the existing /downloaders/{id}/anime/{anime_id}
+    # route above, whose anime_id has the identical shape).
+    seasonal.unfollow(show_id)
+    return {"ok": True}
 
 
 @app.post("/downloads", response_model=JobInfo)

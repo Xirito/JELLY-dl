@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { AnimeDetails, AnimeMatch, SearchResult } from "../types";
+import type { AnimeDetails, AnimeMatch, SearchResult, SeasonalSearchRequest } from "../types";
 import ProviderStatusBar from "./ProviderStatusBar";
 
 interface AnimeTorrentPanelProps {
@@ -10,6 +10,17 @@ interface AnimeTorrentPanelProps {
   setPreviewThumbnail: (url: string | null) => void;
   maybeAutoFillDest: (title: string | null) => void;
   setMsg: (text: string, isError?: boolean) => void;
+  // Set by App.tsx when the user picks "Search" on a followed show in
+  // SeasonalCalendar. Ids there are namespaced ("anilist:123"/"mal:456")
+  // exactly like this backend's own anime ids (see nyaa_tor_plugin.py), so
+  // an id-shaped request goes straight to the existing anime-details
+  // lookup below -- no separate search-then-pick step needed.
+  seasonalRequest?: SeasonalSearchRequest | null;
+  // Called right after this panel acts on a seasonalRequest, so App.tsx
+  // can clear it back to null -- otherwise it would still be sitting in
+  // App's state the next time a *different* panel mounts (e.g. the user
+  // switches backends right after searching), and re-fire there too.
+  onSeasonalRequestHandled?: () => void;
 }
 
 // Fansub/release-group tags, not torrent sites — nyaa.si stays the one
@@ -26,6 +37,8 @@ export default function AnimeTorrentPanel({
   setPreviewThumbnail,
   maybeAutoFillDest,
   setMsg,
+  seasonalRequest,
+  onSeasonalRequestHandled,
 }: AnimeTorrentPanelProps) {
   const [animeQuery, setAnimeQuery] = useState("");
   const [animeResults, setAnimeResults] = useState<AnimeMatch[]>([]);
@@ -59,6 +72,24 @@ export default function AnimeTorrentPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [downloaderId]);
 
+  // A followed show's id is always "anilist:"/"mal:"-prefixed (see
+  // services/seasonal.py) -- the same namespace this backend's own anime
+  // ids use -- so it can be handed straight to handlePickAnime() below,
+  // skipping the search-results-list step entirely. Any other id shape
+  // (there isn't one today, but this stays correct if that ever changes)
+  // falls back to a plain title search instead.
+  useEffect(() => {
+    if (!seasonalRequest) return;
+    if (seasonalRequest.id.startsWith("anilist:") || seasonalRequest.id.startsWith("mal:")) {
+      handlePickAnime({ id: seasonalRequest.id, title: seasonalRequest.title });
+    } else {
+      setAnimeQuery(seasonalRequest.title);
+      handleAnimeSearch(seasonalRequest.title);
+    }
+    onSeasonalRequestHandled?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seasonalRequest?.token]);
+
   function resetPicked() {
     setPickedAnime(null);
     setVariantIdx(0);
@@ -75,8 +106,14 @@ export default function AnimeTorrentPanel({
     setTorrentQuery(tag ? `[${tag}] ${base}` : base);
   }
 
-  async function handleAnimeSearch() {
-    const q = animeQuery.trim();
+  // `overrideQuery`: used only by the seasonalRequest effect below, which
+  // needs to search with a title it just set via setAnimeQuery() in the
+  // same tick -- reading `animeQuery` here instead would still see the
+  // PRE-update value (React state updates aren't synchronous), so the
+  // override is passed explicitly rather than relying on the state having
+  // "already" changed.
+  async function handleAnimeSearch(overrideQuery?: string) {
+    const q = (overrideQuery ?? animeQuery).trim();
     if (!q) return;
     setAnimeSearching(true);
     setMsg("searching anidb…");
@@ -163,7 +200,7 @@ export default function AnimeTorrentPanel({
             if (e.key === "Enter") handleAnimeSearch();
           }}
         />
-        <button style={{ flex: "0 0 auto" }} disabled={animeSearching} onClick={handleAnimeSearch}>
+        <button style={{ flex: "0 0 auto" }} disabled={animeSearching} onClick={() => handleAnimeSearch()}>
           Search
         </button>
       </div>

@@ -133,6 +133,22 @@ class AnimeDetail:
     synonyms: list[str] = field(default_factory=list)
 
 
+_SEASONAL_FIELDS = "title,main_picture{medium,large},broadcast{day_of_the_week,start_time}"
+# MAL spells this out as a full day name, plural ("mondays", "tuesdays", ...)
+# -- confirmed against MAL's own /anime/season API docs. Accepting the
+# singular form too costs nothing and guards against a spelling that
+# changes on their end without this silently going to None everywhere.
+_MAL_WEEKDAY = {
+    "monday": 0, "mondays": 0,
+    "tuesday": 1, "tuesdays": 1,
+    "wednesday": 2, "wednesdays": 2,
+    "thursday": 3, "thursdays": 3,
+    "friday": 4, "fridays": 4,
+    "saturday": 5, "saturdays": 5,
+    "sunday": 6, "sundays": 6,
+}
+
+
 def anime_detail(media_id: str) -> AnimeDetail | None:
     try:
         numeric_id = int(media_id)
@@ -162,3 +178,39 @@ def anime_detail(media_id: str) -> AnimeDetail | None:
     cover = cover_obj.get("large") or cover_obj.get("medium")
     synonyms = [s for s in (alt.get("synonyms") or []) if s]
     return AnimeDetail(official=official, cover=cover, romaji=romaji, synonyms=synonyms)
+
+
+@dataclass
+class SeasonalEntry:
+    id: str
+    title: str
+    cover: str | None = None
+    day_of_week: int | None = None  # 0=Monday..6=Sunday -- MAL gives this directly
+
+
+def seasonal_anime(season: str, year: int, limit: int = 50) -> list[SeasonalEntry]:
+    """Fallback for services/seasonal.py, used only when AniList's own
+    seasonal query fails and MAL_CLIENT_ID is set -- same reasoning as this
+    module's search_anime()/anime_detail() being nyaa_tor_plugin.py's own
+    fallback. `season` is case-insensitive; MAL's URL path wants it
+    lowercase ("winter"/"spring"/"summer"/"fall").
+    """
+    data = _get(
+        f"/anime/season/{year}/{season.lower()}",
+        {"limit": limit, "fields": _SEASONAL_FIELDS, "sort": "anime_num_list_users"},
+    )
+    out: list[SeasonalEntry] = []
+    for node in data.get("data") or []:
+        entry = node.get("node") if isinstance(node, dict) else None
+        if not isinstance(entry, dict):
+            continue
+        anime_id = entry.get("id")
+        title = entry.get("title")
+        if anime_id is None or not title:
+            continue
+        cover_obj = entry.get("main_picture") or {}
+        cover = cover_obj.get("large") or cover_obj.get("medium")
+        bcast = entry.get("broadcast") or {}
+        day_raw = (bcast.get("day_of_the_week") or "").strip().lower()
+        out.append(SeasonalEntry(id=str(anime_id), title=title, cover=cover, day_of_week=_MAL_WEEKDAY.get(day_raw)))
+    return out

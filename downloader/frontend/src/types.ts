@@ -35,6 +35,32 @@ export interface AnimeDetails {
   title_variants: string[];
 }
 
+// Mirrors SeasonalShow in downloader/app/models.py -- see
+// services/seasonal.py. `id` is namespaced ("anilist:123"/"mal:456"),
+// exactly like NyaaTorDownloader's own anime ids, so a followed show can
+// go straight to /downloaders/nyaa_tor/anime/{id} when the user picks
+// "search" (see components/SeasonalCalendar.tsx).
+export interface SeasonalShow {
+  id: string;
+  title: string;
+  cover?: string | null;
+  // 0=Monday..6=Sunday, in the server's local time. null = no
+  // currently-scheduled next episode (not airing yet, or fully aired).
+  day_of_week?: number | null;
+  followed: boolean;
+}
+
+// What "Search" in the seasonal calendar's context menu hands up to
+// App.tsx, which forwards it to whichever anime-capable panel is
+// currently mounted (AnimeTorrentPanel or SearchPanel). `token` is bumped
+// on every pick so the same show can be searched twice in a row and still
+// re-trigger the receiving panel's effect.
+export interface SeasonalSearchRequest {
+  token: number;
+  id: string;
+  title: string;
+}
+
 // Mirrors ProviderStatus in downloader/app/models.py -- a passive read of
 // the backend's in-memory health state (nyaa_tor_plugin.py's
 // provider_status()), never a live ping to AniList/MyAnimeList itself.

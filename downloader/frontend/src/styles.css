@@ -336,3 +336,162 @@ button:disabled {
   border: 2px solid var(--panel);
   box-sizing: content-box;
 }
+
+/* Seasonal-follow calendar (SeasonalCalendar.tsx) --------------------- */
+.seasonal-tabs {
+  gap: 8px;
+}
+.seasonal-tabs button {
+  flex: 1;
+}
+.seasonal-tabs button.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* A horizontally-scrolling strip of day columns rather than a fixed
+   7-column grid -- at a ~360px phone width seven columns has no room to
+   show a cover + title in any of them, but a scroll-to-today strip works
+   at any width with no separate mobile rule needed. */
+.seasonal-grid {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  margin-top: 10px;
+}
+.seasonal-day {
+  flex: 0 0 100px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 6px;
+  background: var(--panel2);
+}
+.seasonal-day.today {
+  border-color: var(--accent);
+  background: rgba(79, 142, 247, 0.12);
+}
+.seasonal-day-label {
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  text-align: center;
+  margin-bottom: 6px;
+}
+.seasonal-day.today .seasonal-day-label {
+  color: var(--accent);
+  font-weight: 600;
+}
+.seasonal-unscheduled-row {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  margin-top: 6px;
+}
+
+.seasonal-cover {
+  cursor: pointer;
+  margin-bottom: 8px;
+  /* Roughly a 44px+ tap target once the cover image itself is included --
+     this app's established mobile touch-target minimum (see .btn-cancel/
+     .check-row above). */
+}
+.seasonal-cover:last-child {
+  margin-bottom: 0;
+}
+.seasonal-cover img,
+.seasonal-cover-blank {
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  object-fit: cover;
+  display: block;
+  background: var(--panel);
+}
+.seasonal-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.3;
+  margin-top: 4px;
+  text-align: center;
+}
+
+.seasonal-season-nav {
+  align-items: center;
+  margin-top: 4px;
+}
+
+.seasonal-browse-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: 12px;
+  margin-top: 10px;
+}
+.seasonal-browse-item {
+  display: flex;
+  flex-direction: column;
+}
+.seasonal-browse-item button {
+  margin-top: 6px;
+  font-size: 12px;
+  padding: 8px 6px;
+  min-height: 44px;
+}
+.seasonal-browse-item button.on {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: #fff;
+}
+
+.seasonal-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  z-index: 20;
+  padding: 16px;
+  padding-bottom: max(16px, env(safe-area-inset-bottom));
+}
+.seasonal-menu {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  width: 100%;
+  max-width: 360px;
+  padding: 12px;
+}
+.seasonal-menu-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  padding: 4px 8px 10px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 6px;
+}
+.seasonal-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 12px 8px;
+  min-height: 44px;
+  font-size: 14px;
+  border-radius: 8px;
+}
+.seasonal-menu-item:hover:not(:disabled) {
+  background: var(--panel2);
+}
+.seasonal-menu-item:disabled {
+  color: var(--muted);
+  cursor: default;
+}

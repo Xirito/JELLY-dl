@@ -112,6 +112,44 @@ query ($id: Int) {
 }
 """
 
+# Seasonal browse (services/seasonal.py) -- unlike _SEARCH_QUERY/_DETAIL_QUERY
+# above (used only by nyaa_tor_plugin.py's anime pre-search step), this one
+# feeds the cross-plugin seasonal-follow tracker, shared by nyaa_tor AND
+# ani-cli. format_in restricts to weekly-TV-style releases (a movie/OVA/
+# special has no weekday to put in a calendar); sort by popularity so a
+# season's ~150+ entries lead with what someone's actually likely to want
+# to follow, since this only takes the first page. nextAiringEpisode is
+# null once a show has fully finished airing (or before it's started) --
+# services/seasonal.py turns its airingAt (a Unix timestamp) into a
+# calendar weekday, in the server's local time (this app has no separate
+# per-user timezone setting anywhere else either).
+_SEASON_QUERY = """
+query ($season: MediaSeason!, $seasonYear: Int!, $page: Int, $perPage: Int) {
+  Page(page: $page, perPage: $perPage) {
+    media(
+      season: $season, seasonYear: $seasonYear, type: ANIME,
+      format_in: [TV, TV_SHORT], sort: POPULARITY_DESC
+    ) {
+      id
+      title {
+        romaji
+        english
+        native
+      }
+      coverImage {
+        extraLarge
+        large
+        medium
+      }
+      nextAiringEpisode {
+        airingAt
+        episode
+      }
+    }
+  }
+}
+"""
+
 
 class AniListError(RuntimeError):
     pass
@@ -280,3 +318,34 @@ def anime_detail(media_id: str) -> AnimeDetail | None:
     cover = cover_obj.get("extraLarge") or cover_obj.get("large") or cover_obj.get("medium")
     synonyms = [s for s in (media.get("synonyms") or []) if s]
     return AnimeDetail(official=official, cover=cover, romaji=romaji, synonyms=synonyms)
+
+
+@dataclass
+class SeasonalEntry:
+    id: str
+    title: str
+    cover: str | None = None
+    next_airing_at: int | None = None  # Unix timestamp (UTC), or None
+
+
+def seasonal_anime(season: str, year: int, per_page: int = 50) -> list[SeasonalEntry]:
+    """One page (default 50, AniList's own per-page ceiling) of a season's
+    anime, most popular first. `season` is case-insensitive
+    ("winter"/"WINTER" both work -- AniList's MediaSeason enum itself is
+    uppercase, normalized here so callers don't have to remember that).
+    """
+    data = _post(_SEASON_QUERY, {"season": season.upper(), "seasonYear": year, "page": 1, "perPage": per_page})
+    media_list = (data.get("Page") or {}).get("media") or []
+    out: list[SeasonalEntry] = []
+    for m in media_list:
+        if not isinstance(m, dict) or m.get("id") is None:
+            continue
+        title = _best_title(m.get("title") or {})
+        if not title:
+            continue
+        cover_obj = m.get("coverImage") or {}
+        cover = cover_obj.get("extraLarge") or cover_obj.get("large") or cover_obj.get("medium")
+        nae = m.get("nextAiringEpisode")
+        airing_at = nae.get("airingAt") if isinstance(nae, dict) else None
+        out.append(SeasonalEntry(id=str(m["id"]), title=title, cover=cover, next_airing_at=airing_at))
+    return out

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { fmtDur } from "../format";
 import { waitForTerminal } from "../hooks/useJobPolling";
-import type { DownloadOptions, Mode, SearchResult } from "../types";
+import type { DownloadOptions, Mode, SearchResult, SeasonalSearchRequest } from "../types";
 
 interface SearchPanelProps {
   downloaderId: string;
@@ -19,6 +19,15 @@ interface SearchPanelProps {
   dub: boolean;
   setMsg: (text: string, isError?: boolean) => void;
   refreshJobs: () => void;
+  // Set by App.tsx when the user picks "Search" on a followed show in
+  // SeasonalCalendar. This backend (ani-cli/yt-dlp) has no id namespace in
+  // common with the seasonal tracker's AniList/MAL-sourced ids, so unlike
+  // AnimeTorrentPanel this always falls back to a plain title search.
+  seasonalRequest?: SeasonalSearchRequest | null;
+  // Called right after this panel acts on a seasonalRequest -- see
+  // AnimeTorrentPanel's identical prop for why App.tsx needs this to clear
+  // the request back to null once it's been handled.
+  onSeasonalRequestHandled?: () => void;
 }
 
 // Some backends (ani-cli) return two-level results: a top-level pick is a
@@ -42,6 +51,8 @@ export default function SearchPanel({
   dub,
   setMsg,
   refreshJobs,
+  seasonalRequest,
+  onSeasonalRequestHandled,
 }: SearchPanelProps) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -61,10 +72,25 @@ export default function SearchPanel({
     bulkActiveRef.current = false;
   }, [downloaderId]);
 
+  // This backend has no id namespace in common with the seasonal
+  // tracker's AniList/MAL-sourced ids (see SeasonalCalendar.tsx /
+  // services/seasonal.py) -- always a plain title search, never an
+  // id-based lookup the way AnimeTorrentPanel's nyaa_tor path can do.
+  useEffect(() => {
+    if (!seasonalRequest) return;
+    setQuery(seasonalRequest.title);
+    handleSearch(seasonalRequest.title);
+    onSeasonalRequestHandled?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seasonalRequest?.token]);
+
   const isLeaf = resultsAreLeaf && results.length > 0 && !results.some((r) => r.is_container);
 
-  async function handleSearch() {
-    const q = query.trim();
+  // `overrideQuery`: used only by the seasonalRequest effect below -- see
+  // AnimeTorrentPanel's identical comment on its own handleAnimeSearch for
+  // why this can't just rely on `query` having already updated.
+  async function handleSearch(overrideQuery?: string) {
+    const q = (overrideQuery ?? query).trim();
     if (!q) return;
     setSearching(true);
     setMsg("searching…");
@@ -173,7 +199,7 @@ export default function SearchPanel({
                 if (e.key === "Enter") handleSearch();
               }}
             />
-            <button style={{ flex: "0 0 auto" }} disabled={searching} onClick={handleSearch}>
+            <button style={{ flex: "0 0 auto" }} disabled={searching} onClick={() => handleSearch()}>
               Search
             </button>
           </div>
