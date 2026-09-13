@@ -48,6 +48,14 @@ class AnimeDetails(BaseModel):
     title_variants: list[str] = []
 
 
+class ProviderStatus(BaseModel):
+    # Mirrors NyaaTorDownloader.provider_status() (nyaa_tor_plugin.py) --
+    # a passive read of in-memory health state, never a live ping to
+    # AniList/MyAnimeList. See main.py's /downloaders/{id}/provider-status.
+    service: str
+    status: Literal["active", "standby", "down"]
+
+
 class SearchResult(BaseModel):
     source: str          # what to feed back into formats/download (usually a URL)
     title: str

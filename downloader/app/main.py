@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import MEDIA_SERVER_TARGETS
-from .models import AnimeDetails, AnimeMatch, DownloadRequest, DownloaderInfo, JobInfo
+from .models import AnimeDetails, AnimeMatch, DownloadRequest, DownloaderInfo, JobInfo, ProviderStatus
 from .registry import build_default_registry
 from .services.directory_browser import DirectoryBrowser
 from .services.download_service import DownloadService
@@ -99,6 +99,20 @@ def anime_details(downloader_id: str, anime_id: str):
         return fn(anime_id)
     except Exception as e:
         raise HTTPException(502, f"anime lookup failed: {e}")
+
+
+@app.get("/downloaders/{downloader_id}/provider-status", response_model=list[ProviderStatus])
+def provider_status(downloader_id: str):
+    # Purely cosmetic (status dots) -- backends that don't implement this
+    # (anything but nyaa_tor) just report nothing, no error, so the
+    # frontend can poll it unconditionally without special-casing backends.
+    # Never touches AniList/MyAnimeList itself -- see provider_status() on
+    # NyaaTorDownloader for why (passive-only health tracking).
+    d = _get_downloader(downloader_id)
+    fn = getattr(d, "provider_status", None)
+    if not callable(fn):
+        return []
+    return fn()
 
 
 @app.post("/downloads", response_model=JobInfo)

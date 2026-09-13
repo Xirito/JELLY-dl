@@ -8,6 +8,7 @@
   --accent: #4f8ef7;
   --ok: #3fbf7f;
   --err: #e5646c;
+  --warn: #e8a33d;
 }
 * {
   box-sizing: border-box;
@@ -298,4 +299,40 @@ button:disabled {
      would hide part of the actual image the whole point is to confirm. */
   object-fit: contain;
   display: block;
+}
+
+/* AniList/MyAnimeList status dots (ProviderStatusBar, shown above the
+   anime-name search box) — green/orange/red per provider, keyed off
+   passively-tracked backend health (see nyaa_tor_plugin.py's
+   provider_status()), never a live ping to either API. Left-aligned by
+   plain flex order — no extra alignment rule needed. */
+.provider-status {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.provider-badge {
+  position: relative;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  cursor: default;
+}
+.provider-badge img {
+  width: 100%;
+  height: 100%;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  object-fit: cover;
+  display: block;
+}
+.provider-badge .dot {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 2px solid var(--panel);
+  box-sizing: content-box;
 }

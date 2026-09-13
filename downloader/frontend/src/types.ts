@@ -35,6 +35,16 @@ export interface AnimeDetails {
   title_variants: string[];
 }
 
+// Mirrors ProviderStatus in downloader/app/models.py -- a passive read of
+// the backend's in-memory health state (nyaa_tor_plugin.py's
+// provider_status()), never a live ping to AniList/MyAnimeList itself.
+// "active" = working and currently used, "standby" = working but not the
+// one in use, "down" = not working, not configured, or never tried yet.
+export interface ProviderStatus {
+  service: string;
+  status: "active" | "standby" | "down";
+}
+
 export interface SearchResult {
   source: string;
   title: string;

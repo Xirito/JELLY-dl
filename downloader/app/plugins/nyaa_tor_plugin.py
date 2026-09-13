@@ -48,6 +48,17 @@ anime_details() knows which backend a given id came from -- the two
 services' ids are unrelated numbers in unrelated namespaces, and a search
 result picked from a fallback response has to route its detail lookup to
 that same backend, not back to AniList.
+
+Per-provider health (last_ok on SearchProvider, guarded by the same lock
+as the sticky-primary swap) is tracked passively off these two calls --
+whatever a real anime_search()/anime_details() call already tells us,
+nothing more. There's deliberately no background health-check ping to
+AniList/MyAnimeList: this is the same "don't make requests nothing asked
+for" reasoning as the sticky failover itself. That means a provider that
+hasn't been hit yet this run shows as unknown/"down" in provider_status()
+below until something actually calls it -- see main.py's
+/downloaders/{id}/provider-status route, which just reads this in-memory
+state back out for the frontend's status dots.
 """
 from __future__ import annotations
 
@@ -84,6 +95,10 @@ class SearchProvider:
     dta: object  # the anilist or mal module -- not an actual type, just needs is_configured()/anime_detail()
     search: Callable[[str], list[tuple[str, str]]]
     error: type[Exception]
+    # Passive health signal -- None means "never tried this run", True/False
+    # is the outcome of the most recent real call. Only ever written by
+    # _mark() below, under _search_providers_lock.
+    last_ok: bool | None = None
 
 
 class NyaaTorDownloader:
@@ -134,17 +149,17 @@ class NyaaTorDownloader:
         self.providers: list[TorrentProvider] = (
             providers if providers is not None else [NyaaProvider()]
         )
-        # Guards reads/writes of the class-level `search_providers` list.
-        # anime_search() below runs through FastAPI's threadpool (it's a
-        # plain `def`, not `async def`), and NyaaTorDownloader is a
-        # singleton (one instance, registered once in registry.py) shared
-        # by every request -- so two searches landing at the same moment
-        # (two tabs, a double-click, two different people) genuinely
-        # execute concurrently against the same list. Without this lock,
-        # one request's `.reverse()` can land mid-way through another
-        # request's read of `search_providers[0]`, producing a result
-        # tagged with the wrong backend's id prefix or an exception type
-        # that no longer matches what actually failed.
+        # Guards reads/writes of the class-level `search_providers` list
+        # AND each SearchProvider's `last_ok` field. anime_search() below
+        # runs through FastAPI's threadpool (it's a plain `def`, not
+        # `async def`), and NyaaTorDownloader is a singleton (one instance,
+        # registered once in registry.py) shared by every request -- so two
+        # searches landing at the same moment (two tabs, a double-click, two
+        # different people) genuinely execute concurrently against the same
+        # list. Without this lock, one request's `.reverse()` can land
+        # mid-way through another request's read of `search_providers[0]`,
+        # producing a result tagged with the wrong backend's id prefix or an
+        # exception type that no longer matches what actually failed.
         self._search_providers_lock = threading.Lock()
 
     # -- search --------------------------------------------------------
@@ -217,6 +232,43 @@ class NyaaTorDownloader:
                     self.search_providers[1], self.search_providers[0],
                 )
 
+    def _mark(self, provider: SearchProvider, ok: bool) -> None:
+        # Passive health tracking -- called only from real anime_search()/
+        # anime_details() outcomes below, never from a background poll. See
+        # provider_status() for how this turns into the frontend's dots.
+        with self._search_providers_lock:
+            provider.last_ok = ok
+
+    def provider_status(self) -> list[dict]:
+        """Snapshot for the frontend's status dots (main.py's
+        /downloaders/{id}/provider-status). Three states, matching the
+        UI's green/orange/red:
+          "active"  -- configured, last known call succeeded, AND currently
+                       primary (this is what a search actually uses).
+          "standby" -- configured and last known call succeeded, but not
+                       currently primary (healthy fallback, sitting idle).
+          "down"    -- not configured, OR never successfully called yet
+                       this run, OR its last real call failed.
+        Purely a read of in-memory state -- makes no request to AniList or
+        MyAnimeList itself.
+        """
+        with self._search_providers_lock:
+            primary = self.search_providers[0]
+            snapshot = [
+                (sp, sp.dta.is_configured(), sp.last_ok)
+                for sp in self.search_providers
+            ]
+        result = []
+        for sp, configured, last_ok in snapshot:
+            if not configured or last_ok is not True:
+                status = "down"
+            elif sp is primary:
+                status = "active"
+            else:
+                status = "standby"
+            result.append({"service": sp.service, "status": status})
+        return result
+
     def anime_search(self, query: str) -> list[AnimeMatch]:
         query = (query or "").strip()
         if not query:
@@ -226,8 +278,10 @@ class NyaaTorDownloader:
         try:
             results = primary.search(query)
             source = primary.service
+            self._mark(primary, True)
         except primary.error as e:
             errors.append(f" {primary.service}: {e}")
+            self._mark(primary, False)
             if not fallback.dta.is_configured():
                 raise
             log.warning("%s search failed, falling back to %s: %s", primary.service, fallback.service, e)
@@ -235,8 +289,10 @@ class NyaaTorDownloader:
             try:
                 results = fallback.search(query)
                 source = fallback.service
+                self._mark(fallback, True)
             except fallback.error as e2:
                 errors.append(f" {fallback.service}: {e2}")
+                self._mark(fallback, False)
                 raise RuntimeError("; ".join(errors)) from e2
         return [
             AnimeMatch(id=f"{source}:{anime_id}", title=title)
@@ -252,30 +308,17 @@ class NyaaTorDownloader:
         if not sprovider:
             raise ValueError("unknown anime source")
 
-        detail = sprovider.dta.anime_detail(raw_id)
         not_found = sprovider.error("couldn't load that anime's page")
+        try:
+            detail = sprovider.dta.anime_detail(raw_id)
+        except sprovider.error:
+            # The API call itself failed (network/outage) -- a real health
+            # signal. A plain "not found" below is NOT this: the API
+            # answered fine, it just had nothing for this id.
+            self._mark(sprovider, False)
+            raise
+        self._mark(sprovider, True)
 
-        if detail is None:
-            raise not_found
-        variants = [detail.official]
-        if detail.romaji and detail.romaji.lower() != detail.official.lower():
-            variants.append(detail.romaji)
-        for syn in detail.synonyms:
-            if syn and syn.lower() not in (v.lower() for v in variants):
-                variants.append(syn)
-        return AnimeDetails(title=detail.official, cover=detail.cover, title_variants=variants)
-
-
-        # rewrite the logic to use the search_providers list instead of hardcoding anilist and mal
-        if sep and source == "mal":
-            detail = mal.anime_detail(raw_id)
-            not_found = mal.MalError("couldn't load that anime's page")
-        else:
-            # "anilist:" prefix, or no recognized prefix at all (defensive
-            # fallback for any id that predates this scheme) -- both go to
-            # AniList, same as before the fallback existed.
-            detail = anilist.anime_detail(raw_id if sep and source == "anilist" else anime_id)
-            not_found = anilist.AniListError("couldn't load that anime's page")
         if detail is None:
             raise not_found
         variants = [detail.official]

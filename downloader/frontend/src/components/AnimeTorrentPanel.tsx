@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { AnimeDetails, AnimeMatch, SearchResult } from "../types";
+import ProviderStatusBar from "./ProviderStatusBar";
 
 interface AnimeTorrentPanelProps {
   downloaderId: string;
@@ -40,6 +41,12 @@ export default function AnimeTorrentPanel({
   const [torrentSearching, setTorrentSearching] = useState(false);
   const [torrentSearched, setTorrentSearched] = useState(false);
   const [pickedMagnet, setPickedMagnet] = useState<string | null>(null);
+
+  // Bumped after every real anime-search/anime-lookup call resolves (pass
+  // or fail) -- those are the only moments the AniList/MyAnimeList status
+  // dots above can actually change, since health is tracked passively off
+  // these same calls (see ProviderStatusBar + nyaa_tor_plugin.py).
+  const [statusTick, setStatusTick] = useState(0);
 
   // Stale state from a different backend can't be reused (anime ids and
   // search results are backend-specific).
@@ -83,6 +90,7 @@ export default function AnimeTorrentPanel({
       setMsg((e as Error).message, true);
     }
     setAnimeSearching(false);
+    setStatusTick((t) => t + 1);
   }
 
   async function handlePickAnime(m: AnimeMatch) {
@@ -102,6 +110,7 @@ export default function AnimeTorrentPanel({
     } catch (e) {
       setMsg((e as Error).message, true);
     }
+    setStatusTick((t) => t + 1);
   }
 
   function handlePickVariant(idx: number) {
@@ -141,6 +150,8 @@ export default function AnimeTorrentPanel({
 
   return (
     <>
+      <ProviderStatusBar downloaderId={downloaderId} refreshSignal={statusTick} />
+
       <label>Anime</label>
       <div className="row">
         <input
