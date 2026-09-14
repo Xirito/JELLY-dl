@@ -29,6 +29,12 @@ class DownloadService:
         # (progress hooks) via a should_cancel() closure. Not part of JobInfo
         # itself — this is orchestration state, not a DTO the API returns.
         self._cancel_flags: dict[str, threading.Event] = {}
+        # The DownloadRequest each job was started with -- kept so a failed
+        # job can be resubmitted verbatim from retry() below (same
+        # downloader/source/format/destination/options) without the caller
+        # having to remember or resend any of it. Evicted in lockstep with
+        # _jobs/_cancel_flags; not part of JobInfo itself, same reasoning.
+        self._requests: dict[str, DownloadRequest] = {}
         self._lock = threading.Lock()
         self.notifiers = build_notifiers(list(MEDIA_SERVER_TARGETS))
 
@@ -48,9 +54,11 @@ class DownloadService:
         with self._lock:
             self._jobs[job.id] = job
             self._cancel_flags[job.id] = threading.Event()
+            self._requests[job.id] = req
             while len(self._jobs) > _MAX_JOBS_KEPT:
                 evicted_id, _ = self._jobs.popitem(last=False)
                 self._cancel_flags.pop(evicted_id, None)
+                self._requests.pop(evicted_id, None)
 
         t = threading.Thread(target=self._run, args=(job.id, dl, req, dest), daemon=True)
         t.start()
@@ -78,6 +86,28 @@ class DownloadService:
             # legitimately. This is just an immediate UI hint.
             job.progress.status = "cancelling"
             return job
+
+    def retry(self, job_id: str) -> JobInfo:
+        """Resubmit a failed job's original request as a brand-new job —
+        same downloader, source, format selector, destination and options,
+        nothing re-typed or re-searched. Deliberately scoped to
+        status == error only: a queued/running job is still in flight (retry
+        makes no sense), a finished job has nothing to retry, and a
+        cancelled job was stopped on purpose rather than failing on its own
+        — if that's really meant to restart, resubmitting the form is the
+        clearer action than an ambiguous "resume" on something the user
+        chose to stop. Raises KeyError (→ 404) if the job is gone, ValueError
+        (→ 400) if it's not eligible."""
+        with self._lock:
+            job = self._jobs[job_id]  # KeyError -> 404
+            if job.status != JobStatus.error:
+                raise ValueError("only a job that ended in error can be resumed")
+            req = self._requests.get(job_id)
+            if req is None:
+                # Evicted along with the job once _MAX_JOBS_KEPT rolled it
+                # off the end of the queue.
+                raise ValueError("original request is no longer available for this job")
+        return self.start(req)
 
     # -- internal ----------------------------------------------------------
     def _run(self, job_id: str, dl, req: DownloadRequest, dest) -> None:

@@ -5,16 +5,32 @@ import { fmtDur, fmtSize } from "../format";
 interface JobQueueProps {
   jobs: JobInfo[];
   onCancel: (id: string) => void;
+  onRetry: (id: string) => Promise<void>;
 }
 
-export default function JobQueue({ jobs, onCancel }: JobQueueProps) {
+export default function JobQueue({ jobs, onCancel, onRetry }: JobQueueProps) {
   // Optimistic local "cancelling" flags — set the instant Cancel is clicked,
   // ahead of the next poll picking up the server's own progress.status.
   const [cancellingLocal, setCancellingLocal] = useState<Set<string>>(new Set());
+  // Resume never changes the *errored* job's own status (retry starts a
+  // separate new job) — the server has nothing to reconcile this against on
+  // the next poll, unlike cancelling above, so this has to be cleared
+  // locally once the request settles rather than once some status changes.
+  const [retryingLocal, setRetryingLocal] = useState<Set<string>>(new Set());
 
   function handleCancel(id: string) {
     setCancellingLocal((prev) => new Set(prev).add(id));
     onCancel(id);
+  }
+
+  async function handleRetry(id: string) {
+    setRetryingLocal((prev) => new Set(prev).add(id));
+    await onRetry(id);
+    setRetryingLocal((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
   }
 
   if (!jobs.length) {
@@ -41,6 +57,8 @@ export default function JobQueue({ jobs, onCancel }: JobQueueProps) {
         const cancellable = j.status === "queued" || j.status === "running";
         const cancelling = p.status === "cancelling" || cancellingLocal.has(j.id);
         const statusLabel = cancelling ? "cancelling…" : j.status;
+        const resumable = j.status === "error";
+        const retrying = retryingLocal.has(j.id);
         return (
           <div className="job" key={j.id}>
             <div className="top">
@@ -54,6 +72,15 @@ export default function JobQueue({ jobs, onCancel }: JobQueueProps) {
                     onClick={() => handleCancel(j.id)}
                   >
                     {cancelling ? "cancelling…" : "Cancel"}
+                  </button>
+                )}
+                {resumable && (
+                  <button
+                    className="btn-resume"
+                    disabled={retrying}
+                    onClick={() => handleRetry(j.id)}
+                  >
+                    {retrying ? "resuming…" : "Resume"}
                   </button>
                 )}
               </span>

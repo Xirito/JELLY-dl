@@ -242,6 +242,19 @@ button:disabled {
   flex: 0 0 auto;
 }
 
+.job .btn-resume {
+  /* Same tap-target sizing as .btn-cancel, accent-colored since retrying a
+     failed job is the positive action here (vs. cancel's neutral one). */
+  padding: 10px 14px;
+  min-height: 44px;
+  font-size: 13px;
+  border-radius: 6px;
+  flex: 0 0 auto;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
 .check-row {
   display: flex;
   gap: 10px;

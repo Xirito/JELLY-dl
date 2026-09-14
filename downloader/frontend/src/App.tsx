@@ -214,6 +214,20 @@ export default function App() {
     }
   }
 
+  // Resubmits an errored job's original request as a new job (see
+  // DownloadService.retry() on the backend) — the failed job itself is
+  // untouched, so its "Resume" button stays put and can be clicked again if
+  // the retry fails too. JobQueue awaits this to clear its own local
+  // "resuming…" flag once the request settles either way.
+  async function handleRetry(id: string) {
+    try {
+      await api(`/downloads/${id}/retry`, { method: "POST" });
+      refreshJobs();
+    } catch (e) {
+      setMsg((e as Error).message, true);
+    }
+  }
+
   return (
     <div className="wrap">
       <h1>
@@ -302,7 +316,7 @@ export default function App() {
       <div className="card">
         <label>Queue</label>
         <div id="jobs">
-          <JobQueue jobs={jobs} onCancel={handleCancel} />
+          <JobQueue jobs={jobs} onCancel={handleCancel} onRetry={handleRetry} />
         </div>
       </div>
 

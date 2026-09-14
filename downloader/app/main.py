@@ -199,6 +199,18 @@ def cancel_download(job_id: str):
         raise HTTPException(404, "no such job")
 
 
+@app.post("/downloads/{job_id}/retry", response_model=JobInfo)
+def retry_download(job_id: str):
+    # Resubmits the failed job's original request as a new job -- see
+    # DownloadService.retry() for why this is scoped to status == error.
+    try:
+        return service.retry(job_id)
+    except KeyError:
+        raise HTTPException(404, "no such job")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.get("/interfaces")
 def interfaces():
     return [{"token": t.token, "placeholder": f"${t.token}$"}
