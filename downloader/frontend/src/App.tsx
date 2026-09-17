@@ -89,7 +89,15 @@ export default function App() {
       if (!showTitle) return;
       const token = mediaTokens.includes("jellyfin") ? "jellyfin" : mediaTokens[0];
       if (!token) return;
-      const clean = showTitle.replace(/[\\/:*?"<>|]/g, "_").trim();
+      // Illegal path characters become a space, not an underscore — a title
+      // like "Show: Subtitle" already has a space right after the colon, so
+      // underscore produced an ugly "Show_ Subtitle"; collapsing whitespace
+      // afterward turns that into a clean "Show Subtitle" instead of a
+      // double space.
+      const clean = showTitle
+        .replace(/[\\/:*?"<>|]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
       if (!clean) return;
       const suggested = `$${token}$/shows/${clean}`;
       setDestination((cur) => {
