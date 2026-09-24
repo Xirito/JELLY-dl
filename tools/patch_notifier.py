@@ -1,39 +1,17 @@
-"""Media-server notifiers — ping a server to rescan after a download lands.
+"""Patch downloader/app/services/notifier.py: after each Jellyfin refresh ping,
+wait for the library scan to finish, then run the alt-title pass (debounced).
+Usage: python3 patch_notifier.py path/to/notifier.py   (idempotent)"""
+import sys
 
-Configured per media-server token via env (docker-compose):
+p = sys.argv[1]
+s = open(p, encoding="utf-8").read()
+if "alt_titles" in s:
+    sys.exit("already patched")
 
-  NOTIFY_<TOKEN>_URL      e.g. NOTIFY_JELLYFIN_URL=http://jellyfin:8096
-  NOTIFY_<TOKEN>_APIKEY   an API key created in that server's dashboard
+start = s.index("class JellyfinNotifier:")
+end = s.index("def build_notifiers(")
 
-Only Jellyfin is implemented today; the Protocol keeps it open for others.
-Notification is best-effort: a failure never fails the download job.
-"""
-from __future__ import annotations
-
-import json
-import logging
-import os
-import threading
-import time
-import urllib.request
-from typing import Protocol
-
-from . import alt_titles
-
-log = logging.getLogger("notifier")
-
-# After a refresh ping, add English/romaji/Japanese aliases to new anime so
-# Jellyfin search finds them by any name (see services/alt_titles.py).
-ALT_TITLES_ENABLED = os.environ.get("ALT_TITLES", "1").lower() not in ("0", "false", "no", "off")
-ALT_TITLES_START_DELAY = float(os.environ.get("ALT_TITLES_START_DELAY", "20"))
-ALT_TITLES_SETTLE = float(os.environ.get("ALT_TITLES_SETTLE", "15"))
-
-
-class MediaServerNotifier(Protocol):
-    def refresh(self) -> None: ...
-
-
-class JellyfinNotifier:
+NEW_CLASS = '''class JellyfinNotifier:
     # One alias worker for the whole process (all JellyfinNotifier instances
     # point at the same server in practice). Debounced: a burst of finished
     # downloads -> one pass after the scan they triggered has finished.
@@ -114,14 +92,26 @@ class JellyfinNotifier:
         log.warning("library scan still running after %ds; running alt titles anyway", timeout)
 
 
-def build_notifiers(tokens: list[str]) -> dict[str, MediaServerNotifier]:
-    """One notifier per configured media-server token that has env creds."""
-    notifiers: dict[str, MediaServerNotifier] = {}
-    for token in tokens:
-        prefix = f"NOTIFY_{token.upper()}_"
-        url = os.environ.get(prefix + "URL")
-        key = os.environ.get(prefix + "APIKEY")
-        if url and key:
-            notifiers[token] = JellyfinNotifier(url, key)
-            log.info("library-refresh notifier active for $%s$", token)
-    return notifiers
+'''
+
+s = s[:start] + NEW_CLASS + s[end:]
+
+# imports + settings
+s = s.replace("import os\n", "import os\nimport threading\nimport time\n", 1)
+s = s.replace(
+    "from typing import Protocol\n",
+    "from typing import Protocol\n\nfrom . import alt_titles\n",
+    1,
+)
+s = s.replace(
+    'log = logging.getLogger("notifier")\n',
+    'log = logging.getLogger("notifier")\n\n'
+    "# After a refresh ping, add English/romaji/Japanese aliases to new anime so\n"
+    "# Jellyfin search finds them by any name (see services/alt_titles.py).\n"
+    'ALT_TITLES_ENABLED = os.environ.get("ALT_TITLES", "1").lower() not in ("0", "false", "no", "off")\n'
+    'ALT_TITLES_START_DELAY = float(os.environ.get("ALT_TITLES_START_DELAY", "20"))\n'
+    'ALT_TITLES_SETTLE = float(os.environ.get("ALT_TITLES_SETTLE", "15"))\n',
+    1,
+)
+open(p, "w", encoding="utf-8").write(s)
+print("patched", p)
