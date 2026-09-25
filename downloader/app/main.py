@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -40,6 +40,27 @@ browser = DirectoryBrowser(resolver)
 service = DownloadService(registry, resolver)
 
 WEB_DIR = Path(__file__).parent / "web"
+
+# Cache policy for the frontend. Behind Cloudflare Access, the HTML shell
+# must never be served from a browser/SW cache: only a real network
+# navigation lets Access notice an expired CF_Authorization cookie and bounce
+# through its login page. So the shell + service-worker plumbing is
+# "no-cache" (always revalidated), while the content-hashed /assets/* chunks
+# are safe to cache forever (a new build means new filenames).
+_NO_CACHE_PATHS = {
+    "/", "/index.html", "/sw.js", "/registerSW.js", "/manifest.webmanifest",
+}
+
+
+@app.middleware("http")
+async def cache_headers(request: Request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path in _NO_CACHE_PATHS:
+        response.headers["Cache-Control"] = "no-cache"
+    elif path.startswith("/assets/"):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return response
 
 
 @app.get("/")

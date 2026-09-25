@@ -45,8 +45,20 @@ export default defineConfig({
       },
       // Deliberately no runtimeCaching entries: /downloaders, /downloads,
       // /interfaces, /paths must always hit the network live (job status,
-      // search results). generateSW (the default strategy) only precaches
-      // the built app shell — JS/CSS/HTML/icons — which is what we want.
+      // search results).
+      workbox: {
+        // Never precache or serve index.html from the service worker. The
+        // default generateSW setup precached it and registered a
+        // NavigationRoute, so every page load was answered from cache and
+        // never reached Cloudflare Access — once the CF_Authorization
+        // cookie expired there was no way back to the login page short of
+        // clearing site data. Navigations must always go to the network so
+        // Access can redirect them. Hashed JS/CSS + icons stay precached
+        // (fast loads, still installable as a PWA).
+        navigateFallback: null,
+        globPatterns: ["**/*.{js,css,png,svg,webmanifest}"],
+        cleanupOutdatedCaches: true,
+      },
     }),
   ],
   server: {
