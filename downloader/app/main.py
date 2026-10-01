@@ -75,14 +75,21 @@ def downloaders():
 
 
 @app.get("/downloaders/{downloader_id}/search")
-def search(downloader_id: str, q: str = Query(""), parent: str | None = Query(None)):
+def search(
+    downloader_id: str,
+    q: str = Query(""),
+    parent: str | None = Query(None),
+    sort: str | None = Query(None),
+):
     d = _get_downloader(downloader_id)
     if not d.capabilities.supports_search:
         raise HTTPException(400, f"{downloader_id} does not support search")
     if not parent and not q:
         raise HTTPException(422, "q is required")
     try:
-        return d.search(q, parent)
+        # Only torrent backends take a sort (see torrent_providers.py's
+        # SORT_OPTIONS) -- don't pass it to ones whose search() has no such arg.
+        return d.search(q, parent, sort=sort) if sort else d.search(q, parent)
     except Exception as e:
         raise HTTPException(502, f"search failed: {e}")
 

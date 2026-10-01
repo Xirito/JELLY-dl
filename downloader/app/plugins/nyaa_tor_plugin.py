@@ -84,7 +84,7 @@ from ..models import (
 )
 from ..services import anilist, mal
 from ..services.torrent_client import TorrentClientManager
-from .torrent_providers import NyaaProvider, TorrentProvider
+from .torrent_providers import DEFAULT_SORT, SORT_OPTIONS, NyaaProvider, TorrentProvider
 
 log = logging.getLogger(__name__)
 
@@ -163,19 +163,25 @@ class NyaaTorDownloader:
         self._search_providers_lock = threading.Lock()
 
     # -- search --------------------------------------------------------
-    def search(self, query: str, parent: str | None = None) -> list[SearchResult]:
+    def search(
+        self, query: str, parent: str | None = None, sort: str | None = None,
+    ) -> list[SearchResult]:
         # No container/leaf split — every provider hands back directly
         # downloadable results, so `parent` is accepted for Protocol
-        # conformance but never used.
+        # conformance but never used. `sort` is a key of SORT_OPTIONS
+        # (torrent_providers.py) -- this is the only backend that takes one.
         query = (query or "").strip()
         if not query:
             raise ValueError("search query is required")
+        sort = sort or DEFAULT_SORT
+        if sort not in SORT_OPTIONS:
+            raise ValueError(f"unknown sort {sort!r}")
 
         results: list[SearchResult] = []
         errors: list[str] = []
         for provider in self.providers:
             try:
-                items = provider.search(query)
+                items = provider.search(query, sort)
             except Exception as e:
                 errors.append(f"{provider.name}: {e}")
                 continue
@@ -192,6 +198,10 @@ class NyaaTorDownloader:
                     bits.append(item.size)
                 if item.seeders is not None or item.leechers is not None:
                     bits.append(f"{item.seeders or 0}↑ {item.leechers or 0}↓")
+                if item.downloads is not None:
+                    bits.append(f"{item.downloads}✓")
+                if item.date:
+                    bits.append(item.date.split(" ")[0])  # drop the time, the day is enough
                 results.append(SearchResult(
                     source=item.magnet,
                     title=item.title,

@@ -30,6 +30,19 @@ interface AnimeTorrentPanelProps {
 // torrent search is just a query string like any other.
 const GROUP_TAGS = ["MTBB", "GJM", "Judas", "EMBER", "Erai-raws", "SubsPlease"];
 
+// Keys must match SORT_OPTIONS in the backend's torrent_providers.py. Sorting
+// is done by nyaa.si itself, so e.g. "Most seeders" surfaces the best-seeded
+// release among every match, not just among the newest page of results.
+const TORRENT_SORTS = [
+  { key: "newest", label: "Newest" },
+  { key: "seeders", label: "Most seeders" },
+  { key: "size_asc", label: "Smallest size" },
+  { key: "size_desc", label: "Largest size" },
+  { key: "downloads", label: "Most downloads" },
+  { key: "leechers", label: "Most leechers" },
+  { key: "oldest", label: "Oldest" },
+];
+
 export default function AnimeTorrentPanel({
   downloaderId,
   src,
@@ -49,6 +62,9 @@ export default function AnimeTorrentPanel({
   const [variantIdx, setVariantIdx] = useState(0);
   const [groupTag, setGroupTag] = useState<string | null>(null);
   const [torrentQuery, setTorrentQuery] = useState("");
+  // Deliberately not reset by resetPicked() -- a preferred sort carries over
+  // from one anime to the next.
+  const [torrentSort, setTorrentSort] = useState("newest");
 
   const [torrentResults, setTorrentResults] = useState<SearchResult[]>([]);
   const [torrentSearching, setTorrentSearching] = useState(false);
@@ -162,13 +178,18 @@ export default function AnimeTorrentPanel({
     composeQuery(tag, variantIdx, pickedAnime);
   }
 
-  async function handleTorrentSearch() {
+  // `overrideSort`: handleSortChange() searches in the same tick it calls
+  // setTorrentSort(), so `torrentSort` here would still be the old value.
+  async function handleTorrentSearch(overrideSort?: string) {
     const q = torrentQuery.trim();
     if (!q) return;
+    const sort = overrideSort ?? torrentSort;
     setTorrentSearching(true);
     setMsg("searching torrents…");
     try {
-      const rs = await api<SearchResult[]>(`/downloaders/${downloaderId}/search?q=${encodeURIComponent(q)}`);
+      const rs = await api<SearchResult[]>(
+        `/downloaders/${downloaderId}/search?q=${encodeURIComponent(q)}&sort=${encodeURIComponent(sort)}`,
+      );
       setTorrentResults(rs);
       setTorrentSearched(true);
       setMsg("");
@@ -176,6 +197,13 @@ export default function AnimeTorrentPanel({
       setMsg((e as Error).message, true);
     }
     setTorrentSearching(false);
+  }
+
+  function handleSortChange(sort: string) {
+    setTorrentSort(sort);
+    // Re-run an existing search right away; before the first search this
+    // just sets the order that search will use.
+    if (torrentSearched) handleTorrentSearch(sort);
   }
 
   function handlePickTorrent(r: SearchResult) {
@@ -266,7 +294,20 @@ export default function AnimeTorrentPanel({
                 if (e.key === "Enter") handleTorrentSearch();
               }}
             />
-            <button style={{ flex: "0 0 auto" }} disabled={torrentSearching} onClick={handleTorrentSearch}>
+            <select
+              style={{ flex: "0 0 auto", width: "auto" }}
+              value={torrentSort}
+              disabled={torrentSearching}
+              onChange={(e) => handleSortChange(e.target.value)}
+              title="Sort torrent results"
+            >
+              {TORRENT_SORTS.map((o) => (
+                <option key={o.key} value={o.key}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+            <button style={{ flex: "0 0 auto" }} disabled={torrentSearching} onClick={() => handleTorrentSearch()}>
               Search
             </button>
           </div>
