@@ -80,13 +80,18 @@ def _get(path: str, params: dict, timeout: int = 15) -> dict:
     n = _next_request_num()
     log.info("MAL request #%d: %s %s", n, path, params)
     t0 = time.monotonic()
-    resp = curl_requests.get(
-        _API_BASE + path,
-        params=params,
-        headers={"X-MAL-CLIENT-ID": _CLIENT_ID, "Accept": "application/json"},
-        impersonate=_IMPERSONATE,
-        timeout=timeout,
-    )
+    try:
+        resp = curl_requests.get(
+            _API_BASE + path,
+            params=params,
+            headers={"X-MAL-CLIENT-ID": _CLIENT_ID, "Accept": "application/json"},
+            impersonate=_IMPERSONATE,
+            timeout=timeout,
+        )
+    except Exception as e:
+        # Transport-level failure -- see the matching note in anilist._post().
+        log.warning("MAL request #%d: couldn't reach MyAnimeList: %s", n, e)
+        raise MalError(f"couldn't reach MyAnimeList: {e}") from e
     elapsed = time.monotonic() - t0
     log.info("MAL response #%d: status=%d elapsed=%.2fs", n, resp.status_code, elapsed)
     if resp.status_code >= 400:

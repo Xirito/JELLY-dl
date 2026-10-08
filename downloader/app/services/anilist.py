@@ -151,6 +151,59 @@ query ($season: MediaSeason!, $seasonYear: Int!, $page: Int, $perPage: Int) {
 """
 
 
+# Season placement (services/season_resolver.py) -- three small lookups the
+# resolver needs beyond what nyaa_tor's pre-search uses:
+#   _TITLES_QUERY     every title/synonym for a batch of ids (one request for
+#                     all seasons of a show) -- matched against existing
+#                     library folder names, and to name a new show's folder
+#                     after its season 1.
+#   _RELATIONS_QUERY  one entry's PREQUEL edges -- walked back to count how
+#                     many seasons came before, for shows anime-lists hasn't
+#                     mapped yet (brand-new seasons, mostly).
+#   _FIND_QUERY       AniList's own single best match for a title, for
+#                     ani-cli picks (they only carry a title, no AniList id);
+#                     the resolver only trusts it on an exact title match.
+_TITLES_QUERY = """
+query ($ids: [Int]) {
+  Page(perPage: 50) {
+    media(id_in: $ids, type: ANIME) {
+      id
+      format
+      title { romaji english native }
+      synonyms
+    }
+  }
+}
+"""
+
+_RELATIONS_QUERY = """
+query ($id: Int) {
+  Media(id: $id, type: ANIME) {
+    id
+    format
+    title { romaji english native }
+    relations {
+      edges {
+        relationType
+        node { id type format title { romaji english native } }
+      }
+    }
+  }
+}
+"""
+
+_FIND_QUERY = """
+query ($search: String) {
+  Media(search: $search, type: ANIME) {
+    id
+    format
+    title { romaji english native }
+    synonyms
+  }
+}
+"""
+
+
 class AniListError(RuntimeError):
     pass
 
@@ -159,13 +212,22 @@ def _post(query: str, variables: dict, timeout: int = 15) -> dict:
     n = _next_request_num()
     log.info("AniList request #%d: %s", n, variables)
     t0 = time.monotonic()
-    resp = curl_requests.post(
-        _API_URL,
-        json={"query": query, "variables": variables},
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
-        impersonate=_IMPERSONATE,
-        timeout=timeout,
-    )
+    try:
+        resp = curl_requests.post(
+            _API_URL,
+            json={"query": query, "variables": variables},
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            impersonate=_IMPERSONATE,
+            timeout=timeout,
+        )
+    except Exception as e:
+        # Transport-level failure (DNS, refused, timeout, proxy) -- curl_cffi
+        # raises its own exception types for these, which used to escape
+        # every caller's `except AniListError` untouched: nyaa_tor's MAL
+        # fallback never kicked in for a plain "can't reach AniList", and
+        # season placement would 500 instead of degrading.
+        log.warning("AniList request #%d: couldn't reach AniList: %s", n, e)
+        raise AniListError(f"couldn't reach AniList: {e}") from e
     elapsed = time.monotonic() - t0
     seen_headers = {h: resp.headers.get(h) for h in _LOG_HEADERS if resp.headers.get(h) is not None}
     log.info(
@@ -318,6 +380,59 @@ def anime_detail(media_id: str) -> AnimeDetail | None:
     cover = cover_obj.get("extraLarge") or cover_obj.get("large") or cover_obj.get("medium")
     synonyms = [s for s in (media.get("synonyms") or []) if s]
     return AnimeDetail(official=official, cover=cover, romaji=romaji, synonyms=synonyms)
+
+
+def best_title(title: dict) -> str | None:
+    """Public alias of _best_title() -- English, then romaji, then native."""
+    return _best_title(title)
+
+
+def media_titles(ids: list[int]) -> dict[int, dict]:
+    """{id: media} for up to 50 ids in one request; each media carries
+    `format`, `title` (romaji/english/native) and `synonyms`. Raises
+    AniListError like every other call here."""
+    ids = sorted({int(i) for i in ids if i is not None})[:50]
+    if not ids:
+        return {}
+    data = _post(_TITLES_QUERY, {"ids": ids})
+    media_list = (data.get("Page") or {}).get("media") or []
+    return {m["id"]: m for m in media_list if isinstance(m, dict) and m.get("id") is not None}
+
+
+def media_relations(media_id: int) -> dict | None:
+    """One entry plus its relation edges, or None if AniList has no such id."""
+    try:
+        data = _post(_RELATIONS_QUERY, {"id": int(media_id)})
+    except AniListError as e:
+        if _is_not_found(e):
+            return None
+        raise
+    media = data.get("Media")
+    return media if isinstance(media, dict) else None
+
+
+def find_one(search: str) -> dict | None:
+    """AniList's single best match for `search`, or None when it has nothing.
+    Callers must verify the match themselves -- AniList always returns
+    *something* close-ish if it can."""
+    search = (search or "").strip()
+    if not search:
+        return None
+    try:
+        data = _post(_FIND_QUERY, {"search": search})
+    except AniListError as e:
+        if _is_not_found(e):
+            return None
+        raise
+    media = data.get("Media")
+    return media if isinstance(media, dict) else None
+
+
+def _is_not_found(e: Exception) -> bool:
+    # Singular Media(...) with no match comes back as HTTP 404 + a GraphQL
+    # "Not Found." error -- an answer, not an outage.
+    msg = str(e).lower()
+    return "not found" in msg or "404" in msg
 
 
 @dataclass

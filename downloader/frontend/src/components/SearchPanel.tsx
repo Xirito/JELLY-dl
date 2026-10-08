@@ -12,7 +12,7 @@ interface SearchPanelProps {
   currentShowTitle: string | null;
   setCurrentShowTitle: (t: string | null) => void;
   setPreviewThumbnail: (url: string | null) => void;
-  maybeAutoFillDest: (title: string | null) => void;
+  maybeAutoFillDest: (title: string | null, animeId?: string | null) => void;
   destination: string;
   mode: Mode;
   embedMeta: boolean;

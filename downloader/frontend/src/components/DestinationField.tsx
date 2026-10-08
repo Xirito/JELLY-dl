@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { MediaInterface } from "../types";
+import type { MediaInterface, SeasonPlacement } from "../types";
 import { usePathSuggestions } from "../hooks/usePathSuggestions";
 
 interface DestinationFieldProps {
@@ -13,6 +13,13 @@ interface DestinationFieldProps {
   showDubToggle: boolean;
   dub: boolean;
   onDubChange: (v: boolean) => void;
+  // Season placement for the picked anime (App.tsx / GET /placement). Only
+  // shown while the field still holds that suggestion -- once the user
+  // types their own path, the season buttons would just overwrite it.
+  placement?: SeasonPlacement | null;
+  placementPending?: boolean;
+  seasonNudged?: boolean;
+  onSeasonShift?: (delta: number) => void;
 }
 
 export default function DestinationField({
@@ -26,6 +33,10 @@ export default function DestinationField({
   showDubToggle,
   dub,
   onDubChange,
+  placement,
+  placementPending,
+  seasonNudged,
+  onSeasonShift,
 }: DestinationFieldProps) {
   const { suggestions, request, clear } = usePathSuggestions(downloaderId);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -75,6 +86,31 @@ export default function DestinationField({
           </div>
         )}
       </div>
+      {placementPending && !placement && (
+        <div className="placement muted">working out the season folder…</div>
+      )}
+      {placement && (
+        <div className="placement">
+          <span className="placement-season">
+            <button
+              type="button"
+              aria-label="previous season"
+              disabled={placement.season <= 0}
+              onClick={() => onSeasonShift?.(-1)}
+            >
+              ‹
+            </button>
+            <span>Season {String(placement.season).padStart(2, "0")}</span>
+            <button type="button" aria-label="next season" onClick={() => onSeasonShift?.(1)}>
+              ›
+            </button>
+          </span>
+          <span className={"placement-badge " + (seasonNudged ? "set" : placement.confidence)}>
+            {seasonNudged ? "set by you" : placement.confidence === "mapped" ? "matched" : "guess — check it"}
+          </span>
+          <span className="placement-note muted">{placement.note}</span>
+        </div>
+      )}
       {showMetaToggle && (
         <div style={{ marginTop: 6 }}>
           {/* .check-row (styles.css) sizes this to a ~44px tap target and

@@ -11,10 +11,10 @@ from fastapi.staticfiles import StaticFiles
 from .config import MEDIA_SERVER_TARGETS
 from .models import (
     AnimeDetails, AnimeMatch, DownloadRequest, DownloaderInfo, FollowShowRequest,
-    JobInfo, ProviderStatus, SeasonalShow,
+    JobInfo, ProviderStatus, SeasonalShow, SeasonPlacement,
 )
 from .registry import build_default_registry
-from .services import seasonal
+from .services import season_resolver, seasonal
 from .services.directory_browser import DirectoryBrowser
 from .services.download_service import DownloadService
 from .services.path_resolver import PathEscapeError, PathResolver
@@ -192,6 +192,22 @@ def seasonal_unfollow(show_id: str):
     # route above, whose anime_id has the identical shape).
     seasonal.unfollow(show_id)
     return {"ok": True}
+
+
+@app.get("/placement", response_model=SeasonPlacement)
+def placement(
+    title: str = Query(min_length=1),
+    anime_id: str | None = Query(default=None),
+    token: str | None = Query(default=None),
+):
+    # Where a picked anime should land: "$token$/shows/<Series>/Season NN".
+    # Downloader-agnostic (nyaa_tor passes its "anilist:"/"mal:" id, ani-cli
+    # only a title) -- see services/season_resolver.py. Never fails on a
+    # flaky AniList/Jellyfin; only on a missing/unknown media library.
+    try:
+        return season_resolver.resolve(title, anime_id=anime_id, token=token)
+    except season_resolver.NoMediaTarget as e:
+        raise HTTPException(400, str(e))
 
 
 @app.post("/downloads", response_model=JobInfo)

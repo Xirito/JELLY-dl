@@ -71,6 +71,23 @@ export interface ProviderStatus {
   status: "active" | "standby" | "down";
 }
 
+// Mirrors SeasonPlacement in downloader/app/models.py -- where a picked
+// anime should land (GET /placement, services/season_resolver.py).
+// `series_dir` is `destination` minus "/Season NN", so the season can be
+// nudged without another round trip.
+export interface SeasonPlacement {
+  destination: string;
+  series_dir: string;
+  series: string;
+  season: number;
+  episode_offset?: number | null;
+  // "mapped" = TVDB season from the anime-lists mapping; "guess" = from
+  // AniList prequels or the title text.
+  confidence: "mapped" | "guess";
+  in_library: boolean;
+  note: string;
+}
+
 export interface SearchResult {
   source: string;
   title: string;

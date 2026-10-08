@@ -84,6 +84,25 @@ class FollowShowRequest(BaseModel):
     year: int
 
 
+class SeasonPlacement(BaseModel):
+    # Where a picked anime should land -- see services/season_resolver.py.
+    # `destination` is ready to drop into the destination field as-is;
+    # `series_dir` is the same minus "/Season NN", so the frontend can
+    # rebuild it when the user nudges the season number.
+    destination: str                 # "$jellyfin$/shows/Attack on Titan/Season 04"
+    series_dir: str                  # "$jellyfin$/shows/Attack on Titan"
+    series: str                      # "Attack on Titan" (folder name, for display)
+    season: int
+    # TVDB numbering for split cours: this entry's episodes start after this
+    # many (AoT Final Season Part 2 -> 16). None when there's no offset.
+    episode_offset: Optional[int] = None
+    # "mapped" = season from the community anime-lists mapping (TVDB);
+    # "guess"  = worked out from AniList prequels or the title text.
+    confidence: Literal["mapped", "guess"]
+    in_library: bool = False         # series_dir is a folder that already exists
+    note: str = ""                   # one human-readable line on how it was decided
+
+
 class SearchResult(BaseModel):
     source: str          # what to feed back into formats/download (usually a URL)
     title: str

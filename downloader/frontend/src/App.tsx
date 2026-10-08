@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
-import type { DownloaderInfo, FormatOption, MediaInterface, Mode, SeasonalSearchRequest } from "./types";
+import type {
+  DownloaderInfo, FormatOption, MediaInterface, Mode, SeasonalSearchRequest, SeasonPlacement,
+} from "./types";
 import { useJobPolling } from "./hooks/useJobPolling";
 import BackendSelect from "./components/BackendSelect";
 import SearchPanel from "./components/SearchPanel";
@@ -90,33 +92,98 @@ export default function App() {
   // field, or one still holding our own previous suggestion. Called from
   // both the container-drill and the leaf-click handlers in SearchPanel —
   // one shared function, so neither path can "forget" to call it.
+  //
+  // For anime the plain title is only a first guess -- a sequel's title
+  // ("Oshi no Ko 2nd Season") is the wrong folder. GET /placement
+  // (services/season_resolver.py) answers with "<Series>/Season NN"
+  // instead; the title-only suggestion is written first so the field is
+  // never empty if the user hits Download straight away, and the
+  // resolver's answer replaces it when it lands.
+  const [placement, setPlacement] = useState<SeasonPlacement | null>(null);
+  const [placementPending, setPlacementPending] = useState(false);
+  const [seasonNudged, setSeasonNudged] = useState(false);
+  const placementRef = useRef<SeasonPlacement | null>(null);
+  const placementKeyRef = useRef("");
+  const placementSeqRef = useRef(0);
+
+  // Writes a suggestion into the destination field -- but never over
+  // something the user typed: only into an empty field, or one still
+  // holding our own previous suggestion.
+  const offerDest = useCallback((suggested: string) => {
+    setDestination((cur) => {
+      const trimmed = cur.trim();
+      if (!trimmed || trimmed === lastAutoDestRef.current) {
+        lastAutoDestRef.current = suggested;
+        return suggested;
+      }
+      return cur;
+    });
+  }, []);
+
   const maybeAutoFillDest = useCallback(
-    (showTitle: string | null) => {
+    (showTitle: string | null, animeId?: string | null) => {
       if (!showTitle) return;
       const token = mediaTokens.includes("jellyfin") ? "jellyfin" : mediaTokens[0];
       if (!token) return;
+      const key = `${token}|${animeId ?? ""}|${showTitle}`;
+      if (key === placementKeyRef.current) {
+        // Same show again (ani-cli calls this on every episode click):
+        // re-offer what we already have, don't ask the backend again.
+        if (placementRef.current) offerDest(placementRef.current.destination);
+        return;
+      }
+      placementKeyRef.current = key;
       // Illegal path characters become a space, not an underscore — a title
       // like "Show: Subtitle" already has a space right after the colon, so
       // underscore produced an ugly "Show_ Subtitle"; collapsing whitespace
       // afterward turns that into a clean "Show Subtitle" instead of a
-      // double space.
+      // double space. (Same rule as the backend's folder_name().)
       const clean = showTitle
         .replace(/[\\/:*?"<>|]/g, " ")
         .replace(/\s+/g, " ")
         .trim();
-      if (!clean) return;
-      const suggested = `$${token}$/shows/${clean}`;
-      setDestination((cur) => {
-        const trimmed = cur.trim();
-        if (!trimmed || trimmed === lastAutoDestRef.current) {
-          lastAutoDestRef.current = suggested;
-          return suggested;
-        }
-        return cur;
-      });
+      if (clean) offerDest(`$${token}$/shows/${clean}`);
+
+      placementRef.current = null;
+      setPlacement(null);
+      setSeasonNudged(false);
+      setPlacementPending(true);
+      const seq = ++placementSeqRef.current;
+      const params = new URLSearchParams({ title: showTitle, token });
+      if (animeId) params.set("anime_id", animeId);
+      api<SeasonPlacement>(`/placement?${params}`)
+        .then((p) => {
+          if (seq !== placementSeqRef.current) return; // superseded by a newer pick
+          placementRef.current = p;
+          setPlacement(p);
+          offerDest(p.destination);
+        })
+        .catch(() => {
+          // keep the title-only suggestion -- nothing better to offer
+        })
+        .finally(() => {
+          if (seq === placementSeqRef.current) setPlacementPending(false);
+        });
     },
-    [mediaTokens]
+    [mediaTokens, offerDest]
   );
+
+  // The season buttons under the destination field. Only rendered while
+  // the field still holds our own suggestion, so this never overwrites a
+  // path the user typed.
+  function shiftSeason(delta: number) {
+    const p = placementRef.current;
+    if (!p) return;
+    const season = Math.max(0, p.season + delta);
+    const destination = `${p.series_dir}/Season ${String(season).padStart(2, "0")}`;
+    const next = { ...p, season, destination };
+    placementRef.current = next;
+    setPlacement(next);
+    setSeasonNudged(true);
+    lastAutoDestRef.current = destination;
+    setDestination(destination);
+  }
+  const destIsOurs = !!destination.trim() && destination.trim() === lastAutoDestRef.current;
 
   // Initial load: backends + media-target interfaces.
   useEffect(() => {
@@ -145,7 +212,20 @@ export default function App() {
     setSrc("");
     setCurrentShowTitle(null);
     setPreviewThumbnail(null);
+    // A destination we suggested for a show on the previous backend is
+    // stale now -- drop it. (Left in place, it would also count as
+    // "user-typed" once the ref below is cleared, and block every
+    // auto-fill on the new backend until cleared by hand.) Anything the
+    // user typed themselves stays.
+    const prevAuto = lastAutoDestRef.current;
+    setDestination((cur) => (prevAuto && cur.trim() === prevAuto ? "" : cur));
     lastAutoDestRef.current = "";
+    placementSeqRef.current += 1; // drop any in-flight placement answer
+    placementKeyRef.current = "";
+    placementRef.current = null;
+    setPlacement(null);
+    setPlacementPending(false);
+    setSeasonNudged(false);
     setMsg("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [downloaderId]);
@@ -323,6 +403,10 @@ export default function App() {
           showDubToggle={!!caps?.supports_dub_toggle}
           dub={dub}
           onDubChange={setDub}
+          placement={destIsOurs ? placement : null}
+          placementPending={placementPending && destIsOurs}
+          seasonNudged={seasonNudged}
+          onSeasonShift={shiftSeason}
         />
         <DownloadButton disabled={going} onClick={handleGo} msg={msg} msgIsError={msgIsError} />
       </div>

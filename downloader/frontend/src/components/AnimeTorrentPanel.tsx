@@ -8,7 +8,7 @@ interface AnimeTorrentPanelProps {
   src: string;
   onSrcChange: (v: string) => void;
   setPreviewThumbnail: (url: string | null) => void;
-  maybeAutoFillDest: (title: string | null) => void;
+  maybeAutoFillDest: (title: string | null, animeId?: string | null) => void;
   setMsg: (text: string, isError?: boolean) => void;
   // Set by App.tsx when the user picks "Search" on a followed show in
   // SeasonalCalendar. Ids there are namespaced ("anilist:123"/"mal:456")
@@ -158,7 +158,9 @@ export default function AnimeTorrentPanel({
       setTorrentSearched(false);
       setPickedMagnet(null);
       setPreviewThumbnail(details.cover ?? null);
-      maybeAutoFillDest(details.title);
+      // m.id ("anilist:123"/"mal:456") lets the season resolver skip
+      // straight to the anime-lists mapping -- no title search needed.
+      maybeAutoFillDest(details.title, m.id);
       setMsg("");
     } catch (e) {
       setMsg((e as Error).message, true);
