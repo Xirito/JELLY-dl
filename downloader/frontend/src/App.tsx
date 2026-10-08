@@ -14,6 +14,12 @@ import ArrowVideo from "./animation/arrow-scene.jsx";
 import { APP_VERSION } from "./version";
 
 const DEFAULT_MODES: Mode[] = ["best_video_audio", "best_audio", "best_video_only", "manual"];
+// The only two backends that actually know how to resolve an anime title --
+// nyaa_tor (AniList/MAL lookup + torrent search) and anicli (direct scrape).
+// The seasonal-follow calendar only makes sense for these two (yt-dlp has
+// no anime index at all, so a title search against it is never useful) --
+// it only renders while one of them is selected; see the JSX below.
+const ANIME_BACKEND_IDS = ["nyaa_tor", "anicli"];
 
 export default function App() {
   const [downloaders, setDownloaders] = useState<DownloaderInfo[]>([]);
@@ -257,7 +263,7 @@ export default function App() {
           <ArrowVideo showControls={false} />
         )}
       </div>
-      <SeasonalCalendar onSearch={handleSeasonalSearch} />
+      {ANIME_BACKEND_IDS.includes(downloaderId) && <SeasonalCalendar onSearch={handleSeasonalSearch} />}
 
       <div className="card">
         <BackendSelect downloaders={downloaders} value={downloaderId} onChange={setDownloaderId} />
