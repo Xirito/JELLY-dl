@@ -57,7 +57,8 @@ export default function App() {
     setMsgIsError(isError);
   }, []);
 
-  // "Search" from SeasonalCalendar's context menu -- forwarded to whichever
+  // A show selected in SeasonalCalendar (left click / tap, or "Search" in
+  // its context menu) -- forwarded to whichever
   // anime-capable panel is mounted below (only one of AnimeTorrentPanel/
   // SearchPanel renders at a time). Each panel decides for itself how to
   // use it (an id-based lookup vs. a plain title search) -- see their own
@@ -65,9 +66,23 @@ export default function App() {
   // repeat pick of the same show, so the effect re-fires every time.
   const [seasonalRequest, setSeasonalRequest] = useState<SeasonalSearchRequest | null>(null);
   const seasonalTokenRef = useRef(0);
+  // Outlined in the calendar; cleared on a backend switch, since the panel
+  // it was loaded into resets then.
+  const [selectedSeasonalId, setSelectedSeasonalId] = useState<string | null>(null);
+  const pickerCardRef = useRef<HTMLDivElement>(null);
   const handleSeasonalSearch = useCallback((show: { id: string; title: string }) => {
     seasonalTokenRef.current += 1;
     setSeasonalRequest({ token: seasonalTokenRef.current, id: show.id, title: show.title });
+    setSelectedSeasonalId(show.id);
+    // On a phone the panel that just loaded the show sits below the
+    // calendar, usually off-screen -- bring it into view. Left alone when
+    // its top is already comfortably visible (desktop, mostly).
+    requestAnimationFrame(() => {
+      const el = pickerCardRef.current;
+      if (!el) return;
+      const top = el.getBoundingClientRect().top;
+      if (top < 0 || top > window.innerHeight * 0.6) el.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   }, []);
   // Cleared back to null by whichever panel's own seasonalRequest effect
   // actually handles it. Without this, a request handled while (say)
@@ -226,6 +241,7 @@ export default function App() {
     setPlacement(null);
     setPlacementPending(false);
     setSeasonNudged(false);
+    setSelectedSeasonalId(null);
     setMsg("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [downloaderId]);
@@ -343,9 +359,11 @@ export default function App() {
           <ArrowVideo showControls={false} />
         )}
       </div>
-      {ANIME_BACKEND_IDS.includes(downloaderId) && <SeasonalCalendar onSearch={handleSeasonalSearch} />}
+      {ANIME_BACKEND_IDS.includes(downloaderId) && (
+        <SeasonalCalendar onSearch={handleSeasonalSearch} selectedId={selectedSeasonalId} />
+      )}
 
-      <div className="card">
+      <div className="card" ref={pickerCardRef}>
         <BackendSelect downloaders={downloaders} value={downloaderId} onChange={setDownloaderId} />
         {caps?.supports_anime_lookup ? (
           <AnimeTorrentPanel

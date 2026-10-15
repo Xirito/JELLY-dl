@@ -1,16 +1,29 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { KeyboardEvent, MouseEvent, PointerEvent } from "react";
 import { api } from "../api";
 import type { SeasonalShow } from "../types";
 
 interface SeasonalCalendarProps {
-  // Fired when the user picks "Search" on a followed show's context menu.
-  // App.tsx forwards this to whichever anime-capable panel is currently
-  // mounted -- this component never talks to a specific downloader itself,
-  // it only knows the seasonal-follow list (shared by both).
+  // Fired when the user selects a followed show (left click / tap, or
+  // "Search" in its context menu). App.tsx forwards this to whichever
+  // anime-capable panel is currently mounted -- this component never talks
+  // to a specific downloader itself, it only knows the seasonal-follow list
+  // (shared by both).
   onSearch: (show: { id: string; title: string }) => void;
+  // The show last selected from here, outlined in the calendar. Owned by
+  // App.tsx so it can clear it when the backend changes (the panel the
+  // selection was loaded into is reset then).
+  selectedId?: string | null;
 }
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+// Touch has no right-click: a long press opens the context menu instead.
+// Android Chrome already turns a long press into a `contextmenu` event, iOS
+// Safari doesn't -- this timer covers both (opening the same menu twice is
+// harmless).
+const LONG_PRESS_MS = 500;
+const LONG_PRESS_SLOP_PX = 10;
 
 // JS Date.getDay() is 0=Sunday..6=Saturday; the backend's day_of_week
 // (services/seasonal.py, mirroring Python's datetime.weekday()) is
@@ -24,7 +37,7 @@ function titleCase(s: string): string {
   return s.length ? s[0] + s.slice(1).toLowerCase() : s;
 }
 
-export default function SeasonalCalendar({ onSearch }: SeasonalCalendarProps) {
+export default function SeasonalCalendar({ onSearch, selectedId }: SeasonalCalendarProps) {
   const [view, setView] = useState<"calendar" | "browse">("calendar");
 
   const [followed, setFollowed] = useState<SeasonalShow[]>([]);
@@ -129,6 +142,85 @@ export default function SeasonalCalendar({ onSearch }: SeasonalCalendarProps) {
     onSearch({ id: show.id, title: show.title });
   }
 
+  // -- cover interactions ---------------------------------------------------
+  // Left click / tap selects (same as "Search" in the menu); right click --
+  // or a long press on touch -- opens the context menu.
+  const pressTimer = useRef<number | null>(null);
+  const pressStart = useRef<{ x: number; y: number } | null>(null);
+  // A long press opens the menu while the finger is still down. If the
+  // browser then turns the release into a click, that click must neither
+  // select the show nor land on the menu's backdrop (closing the menu it
+  // just opened) -- so clicks are ignored for a moment after a long press.
+  // Time-boxed rather than "skip the next click": most browsers send no
+  // click after a long press, and the user's next real tap must still work.
+  const suppressClicksUntil = useRef(0);
+  const clickSuppressed = () => Date.now() < suppressClicksUntil.current;
+
+  function cancelPress() {
+    if (pressTimer.current !== null) window.clearTimeout(pressTimer.current);
+    pressTimer.current = null;
+    pressStart.current = null;
+  }
+
+  useEffect(() => cancelPress, []);
+
+  function coverHandlers(s: SeasonalShow) {
+    return {
+      onClick: () => {
+        if (!clickSuppressed()) pickSearch(s);
+      },
+      onContextMenu: (e: MouseEvent) => {
+        e.preventDefault(); // no browser menu / image "Save as" on top of ours
+        // Android's own long-press -> contextmenu beats our timer: same
+        // click guard as the timer path below.
+        if (pressStart.current) suppressClicksUntil.current = Date.now() + 700;
+        cancelPress();
+        setMenuFor(s);
+      },
+      onPointerDown: (e: PointerEvent) => {
+        if (e.pointerType !== "touch") return;
+        pressStart.current = { x: e.clientX, y: e.clientY };
+        pressTimer.current = window.setTimeout(() => {
+          pressTimer.current = null;
+          suppressClicksUntil.current = Date.now() + 700;
+          setMenuFor(s);
+        }, LONG_PRESS_MS);
+      },
+      onPointerMove: (e: PointerEvent) => {
+        // a scroll/swipe through the day strip, not a press
+        const p = pressStart.current;
+        if (p && Math.hypot(e.clientX - p.x, e.clientY - p.y) > LONG_PRESS_SLOP_PX) cancelPress();
+      },
+      onPointerUp: cancelPress,
+      onPointerCancel: cancelPress,
+      onPointerLeave: cancelPress,
+      onKeyDown: (e: KeyboardEvent) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          pickSearch(s);
+        }
+        // the ContextMenu key / Shift+F10 fire onContextMenu by themselves
+      },
+    };
+  }
+
+  function renderCover(s: SeasonalShow) {
+    return (
+      <div
+        className={"seasonal-cover" + (s.id === selectedId ? " selected" : "")}
+        key={s.id}
+        role="button"
+        tabIndex={0}
+        aria-pressed={s.id === selectedId}
+        title={`${s.title} — click to select, right-click for options`}
+        {...coverHandlers(s)}
+      >
+        {s.cover ? <img src={s.cover} alt="" draggable={false} /> : <div className="seasonal-cover-blank" />}
+        <span className="seasonal-title">{s.title}</span>
+      </div>
+    );
+  }
+
   const today = todayIndex();
   const byDay: SeasonalShow[][] = Array.from({ length: 7 }, () => []);
   const unscheduled: SeasonalShow[] = [];
@@ -161,12 +253,7 @@ export default function SeasonalCalendar({ onSearch }: SeasonalCalendarProps) {
               {DAY_LABELS.map((label, i) => (
                 <div className={"seasonal-day" + (i === today ? " today" : "")} key={label}>
                   <div className="seasonal-day-label">{label}</div>
-                  {byDay[i].map((s) => (
-                    <div className="seasonal-cover" key={s.id} onClick={() => setMenuFor(s)}>
-                      {s.cover ? <img src={s.cover} alt="" /> : <div className="seasonal-cover-blank" />}
-                      <span className="seasonal-title">{s.title}</span>
-                    </div>
-                  ))}
+                  {byDay[i].map(renderCover)}
                 </div>
               ))}
             </div>
@@ -176,15 +263,13 @@ export default function SeasonalCalendar({ onSearch }: SeasonalCalendarProps) {
               <div className="seasonal-day-label" style={{ marginTop: 12 }}>
                 Not yet scheduled
               </div>
-              <div className="seasonal-unscheduled-row">
-                {unscheduled.map((s) => (
-                  <div className="seasonal-cover" key={s.id} onClick={() => setMenuFor(s)}>
-                    {s.cover ? <img src={s.cover} alt="" /> : <div className="seasonal-cover-blank" />}
-                    <span className="seasonal-title">{s.title}</span>
-                  </div>
-                ))}
-              </div>
+              <div className="seasonal-unscheduled-row">{unscheduled.map(renderCover)}</div>
             </>
+          )}
+          {followed.length > 0 && (
+            <div className="seasonal-hint muted">
+              Click a show to load it · right-click or long-press for more
+            </div>
           )}
         </>
       )}
@@ -221,7 +306,7 @@ export default function SeasonalCalendar({ onSearch }: SeasonalCalendarProps) {
       )}
 
       {menuFor && (
-        <div className="seasonal-menu-backdrop" onClick={() => setMenuFor(null)}>
+        <div className="seasonal-menu-backdrop" onClick={() => !clickSuppressed() && setMenuFor(null)}>
           <div className="seasonal-menu" onClick={(e) => e.stopPropagation()}>
             <div className="seasonal-menu-title">{menuFor.title}</div>
             <button className="seasonal-menu-item" onClick={() => pickSearch(menuFor)}>

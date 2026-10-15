@@ -407,6 +407,12 @@ button:disabled {
 
 .seasonal-cover {
   cursor: pointer;
+  /* long press opens our context menu -- keep iOS's image callout and
+     text-selection handles from popping up over it */
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  border-radius: 8px;
   margin-bottom: 8px;
   /* Roughly a 44px+ tap target once the cover image itself is included --
      this app's established mobile touch-target minimum (see .btn-cancel/
@@ -550,4 +556,23 @@ button:disabled {
 .placement-note {
   flex: 1 1 220px;
   font-size: 12px;
+}
+
+/* The show currently selected from the calendar (left click / tap). */
+.seasonal-cover.selected img,
+.seasonal-cover.selected .seasonal-cover-blank {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.seasonal-cover.selected .seasonal-title {
+  color: var(--accent);
+  font-weight: 600;
+}
+.seasonal-cover:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.seasonal-hint {
+  font-size: 12px;
+  margin-top: 10px;
 }
