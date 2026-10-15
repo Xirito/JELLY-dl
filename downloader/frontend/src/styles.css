@@ -576,3 +576,79 @@ button:disabled {
   font-size: 12px;
   margin-top: 10px;
 }
+
+/* Context menu "Show on" -- place a followed show on a weekday by hand.
+   Seven days + Auto wrap onto two rows on a phone; each chip keeps a
+   comfortable tap target. */
+.seasonal-menu-days {
+  padding: 6px 8px 10px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+}
+.seasonal-menu-days-label {
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 6px;
+}
+.seasonal-menu-days-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.day-chip {
+  min-width: 44px;
+  min-height: 40px;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+.day-chip.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.day-chip.auto {
+  flex: 1 1 auto;
+}
+
+/* "Follow more": name filter + "continuing" tag on shows from earlier
+   seasons that are still airing. */
+.seasonal-filter {
+  margin-top: 10px;
+}
+.seasonal-tag {
+  align-self: center;
+  font-size: 11px;
+  color: var(--warn);
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  padding: 0 7px;
+  margin-top: 4px;
+}
+
+/* "+ Add to schedule" in the search panels. */
+.schedule-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+.schedule-row-title {
+  flex: 1;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.schedule-btn {
+  flex: 0 0 auto;
+  min-height: 40px;
+  padding: 6px 12px;
+  font-size: 13px;
+}
+.schedule-btn.on {
+  color: var(--ok);
+  border-color: var(--ok);
+  opacity: 1;
+}

@@ -138,7 +138,11 @@ class AnimeDetail:
     synonyms: list[str] = field(default_factory=list)
 
 
-_SEASONAL_FIELDS = "title,main_picture{medium,large},broadcast{day_of_the_week,start_time}"
+_SEASONAL_FIELDS = "title,main_picture{medium,large},broadcast{day_of_the_week,start_time},media_type,start_season"
+# Same scope as AniList's side (anilist.py's format_in: TV, TV_SHORT, ONA) --
+# MAL's season listing also carries movies, OVAs, specials and music videos,
+# none of which have a weekday to put in a calendar.
+_SEASONAL_MEDIA_TYPES = {"tv", "ona", "tv_special"}
 # MAL spells this out as a full day name, plural ("mondays", "tuesdays", ...)
 # -- confirmed against MAL's own /anime/season API docs. Accepting the
 # singular form too costs nothing and guards against a spelling that
@@ -191,14 +195,34 @@ class SeasonalEntry:
     title: str
     cover: str | None = None
     day_of_week: int | None = None  # 0=Monday..6=Sunday -- MAL gives this directly
+    season: str | None = None       # the show's START season, e.g. "SUMMER"
+    season_year: int | None = None
 
 
-def seasonal_anime(season: str, year: int, limit: int = 50) -> list[SeasonalEntry]:
+def _seasonal_entry(entry: dict) -> SeasonalEntry | None:
+    anime_id = entry.get("id")
+    title = entry.get("title")
+    if anime_id is None or not title:
+        return None
+    cover_obj = entry.get("main_picture") or {}
+    cover = cover_obj.get("large") or cover_obj.get("medium")
+    bcast = entry.get("broadcast") or {}
+    day_raw = (bcast.get("day_of_the_week") or "").strip().lower()
+    start = entry.get("start_season") or {}
+    return SeasonalEntry(
+        id=str(anime_id), title=title, cover=cover, day_of_week=_MAL_WEEKDAY.get(day_raw),
+        season=(start.get("season") or "").upper() or None, season_year=start.get("year"),
+    )
+
+
+def seasonal_anime(season: str, year: int, limit: int = 500) -> list[SeasonalEntry]:
     """Fallback for services/seasonal.py, used only when AniList's own
     seasonal query fails and MAL_CLIENT_ID is set -- same reasoning as this
     module's search_anime()/anime_detail() being nyaa_tor_plugin.py's own
     fallback. `season` is case-insensitive; MAL's URL path wants it
-    lowercase ("winter"/"spring"/"summer"/"fall").
+    lowercase ("winter"/"spring"/"summer"/"fall"). One request: MAL allows
+    up to 500 per page, more than any season has (the old limit of 50
+    dropped most of a busy season).
     """
     data = _get(
         f"/anime/season/{year}/{season.lower()}",
@@ -209,13 +233,27 @@ def seasonal_anime(season: str, year: int, limit: int = 50) -> list[SeasonalEntr
         entry = node.get("node") if isinstance(node, dict) else None
         if not isinstance(entry, dict):
             continue
-        anime_id = entry.get("id")
-        title = entry.get("title")
-        if anime_id is None or not title:
+        if (entry.get("media_type") or "tv").lower() not in _SEASONAL_MEDIA_TYPES:
             continue
-        cover_obj = entry.get("main_picture") or {}
-        cover = cover_obj.get("large") or cover_obj.get("medium")
-        bcast = entry.get("broadcast") or {}
-        day_raw = (bcast.get("day_of_the_week") or "").strip().lower()
-        out.append(SeasonalEntry(id=str(anime_id), title=title, cover=cover, day_of_week=_MAL_WEEKDAY.get(day_raw)))
+        e = _seasonal_entry(entry)
+        if e:
+            out.append(e)
     return out
+
+
+def schedule_info(media_id: int) -> SeasonalEntry | None:
+    """One show's schedule info (services/seasonal.py's follow_anime(), for
+    a "mal:" id). None when MAL doesn't have it."""
+    try:
+        data = _get(f"/anime/{int(media_id)}", {"fields": _SEASONAL_FIELDS + ",alternative_titles{en}"})
+    except MalError as e:
+        if "404" in str(e):
+            return None
+        raise
+    if not isinstance(data, dict) or not data.get("title"):
+        return None
+    e = _seasonal_entry(data)
+    en = (data.get("alternative_titles") or {}).get("en")
+    if e and en:
+        e.title = en  # English first, same as anime_detail()
+    return e

@@ -5,7 +5,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class DownloaderCapabilities(BaseModel):
@@ -68,8 +68,34 @@ class SeasonalShow(BaseModel):
     cover: Optional[str] = None
     # 0=Monday..6=Sunday, in the server's local timezone -- None means no
     # currently-scheduled next episode (not yet airing, or fully aired).
+    # For a followed show this is the day the user placed it on, if they
+    # did (day_manual) -- otherwise the airing day.
     day_of_week: Optional[int] = None
     followed: bool = False
+    # Browse only: airing this season but started in an earlier one (a
+    # second cour, a long-runner) -- AniList lists those under their start
+    # season, so they're merged in separately.
+    continuing: bool = False
+    # Followed shows only: day_of_week was set by hand from the context menu,
+    # and auto_day_of_week is what it would be otherwise (None = no
+    # scheduled next episode).
+    day_manual: bool = False
+    auto_day_of_week: Optional[int] = None
+
+
+class FollowAnimeRequest(BaseModel):
+    # Body for POST /seasonal/follow-anime -- "Add to schedule" from a search
+    # result. nyaa picks carry their "anilist:"/"mal:" id; ani-cli picks only
+    # a title, which is matched on AniList. The server looks up cover and
+    # airing day itself.
+    id: Optional[str] = None
+    title: str = Field(min_length=1)
+
+
+class SetDayRequest(BaseModel):
+    # Body for PUT /seasonal/follow/{id}/day -- 0=Monday..6=Sunday places the
+    # show on that day; null goes back to its airing day.
+    day: Optional[int] = Field(default=None, ge=0, le=6)
 
 
 class FollowShowRequest(BaseModel):

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { AnimeDetails, AnimeMatch, SearchResult, SeasonalSearchRequest } from "../types";
+import type { AnimeDetails, AnimeMatch, ScheduleControls, SearchResult, SeasonalSearchRequest } from "../types";
+import AddToScheduleButton from "./AddToScheduleButton";
 import ProviderStatusBar from "./ProviderStatusBar";
 
 interface AnimeTorrentPanelProps {
@@ -21,6 +22,9 @@ interface AnimeTorrentPanelProps {
   // App's state the next time a *different* panel mounts (e.g. the user
   // switches backends right after searching), and re-fire there too.
   onSeasonalRequestHandled?: () => void;
+  // "Add to schedule" for the confirmed anime -- null when the schedule
+  // isn't available.
+  schedule?: ScheduleControls | null;
 }
 
 // Fansub/release-group tags, not torrent sites — nyaa.si stays the one
@@ -52,6 +56,7 @@ export default function AnimeTorrentPanel({
   setMsg,
   seasonalRequest,
   onSeasonalRequestHandled,
+  schedule,
 }: AnimeTorrentPanelProps) {
   const [animeQuery, setAnimeQuery] = useState("");
   const [animeResults, setAnimeResults] = useState<AnimeMatch[]>([]);
@@ -59,6 +64,8 @@ export default function AnimeTorrentPanel({
   const [animeSearched, setAnimeSearched] = useState(false);
 
   const [pickedAnime, setPickedAnime] = useState<AnimeDetails | null>(null);
+  // The picked anime's "anilist:"/"mal:" id (AnimeDetails itself has none).
+  const [pickedId, setPickedId] = useState<string | null>(null);
   const [variantIdx, setVariantIdx] = useState(0);
   const [groupTag, setGroupTag] = useState<string | null>(null);
   const [torrentQuery, setTorrentQuery] = useState("");
@@ -108,6 +115,7 @@ export default function AnimeTorrentPanel({
 
   function resetPicked() {
     setPickedAnime(null);
+    setPickedId(null);
     setVariantIdx(0);
     setGroupTag(null);
     setTorrentQuery("");
@@ -151,6 +159,7 @@ export default function AnimeTorrentPanel({
     try {
       const details = await api<AnimeDetails>(`/downloaders/${downloaderId}/anime/${encodeURIComponent(m.id)}`);
       setPickedAnime(details);
+      setPickedId(m.id);
       setVariantIdx(0);
       setGroupTag(null);
       setTorrentQuery(details.title);
@@ -260,6 +269,16 @@ export default function AnimeTorrentPanel({
               change
             </span>
           </div>
+          {schedule && (
+            <div className="schedule-row">
+              <AddToScheduleButton
+                key={`${pickedId}|${pickedAnime.title}`}
+                schedule={schedule}
+                id={pickedId}
+                title={pickedAnime.title}
+              />
+            </div>
+          )}
 
           {pickedAnime.title_variants.length > 1 && (
             <>

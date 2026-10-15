@@ -48,6 +48,21 @@ export interface SeasonalShow {
   // currently-scheduled next episode (not airing yet, or fully aired).
   day_of_week?: number | null;
   followed: boolean;
+  // Browse only: started in an earlier season, still airing.
+  continuing?: boolean;
+  // Followed only: placed on day_of_week by hand from the context menu;
+  // auto_day_of_week is its airing day (null = no scheduled next episode).
+  day_manual?: boolean;
+  auto_day_of_week?: number | null;
+}
+
+// What App.tsx hands the search panels so they can offer "Add to schedule"
+// (only while an anime backend is selected -- the schedule itself is hidden
+// otherwise). add() resolves to the show actually added, or null on failure
+// (App.tsx reports the error itself).
+export interface ScheduleControls {
+  followed: SeasonalShow[];
+  add: (id: string | null, title: string) => Promise<SeasonalShow | null>;
 }
 
 // What "Search" in the seasonal calendar's context menu hands up to

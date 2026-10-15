@@ -14,6 +14,12 @@ interface SeasonalCalendarProps {
   // App.tsx so it can clear it when the backend changes (the panel the
   // selection was loaded into is reset then).
   selectedId?: string | null;
+  // Bumped by App.tsx when something outside this component changed the
+  // schedule ("Add to schedule" from a search) -- reloads the followed list.
+  reloadKey?: number;
+  // Every load of the followed list is reported up, so the search panels
+  // can tell whether a show is already in the schedule.
+  onFollowedChange?: (followed: SeasonalShow[]) => void;
 }
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -33,11 +39,18 @@ function todayIndex(): number {
   return (new Date().getDay() + 6) % 7;
 }
 
+// Case/punctuation-insensitive substring match for the browse filter.
+function matchesFilter(title: string, filter: string): boolean {
+  const norm = (x: string) => x.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  const f = norm(filter);
+  return !f || norm(title).includes(f);
+}
+
 function titleCase(s: string): string {
   return s.length ? s[0] + s.slice(1).toLowerCase() : s;
 }
 
-export default function SeasonalCalendar({ onSearch, selectedId }: SeasonalCalendarProps) {
+export default function SeasonalCalendar({ onSearch, selectedId, reloadKey = 0, onFollowedChange }: SeasonalCalendarProps) {
   const [view, setView] = useState<"calendar" | "browse">("calendar");
 
   const [followed, setFollowed] = useState<SeasonalShow[]>([]);
@@ -48,18 +61,29 @@ export default function SeasonalCalendar({ onSearch, selectedId }: SeasonalCalen
   const [browsed, setBrowsed] = useState<SeasonalShow[]>([]);
   const [browsing, setBrowsing] = useState(false);
   const [browseErr, setBrowseErr] = useState("");
+  // A season can list 150+ shows now (all pages + continuing ones) --
+  // narrow it down by name.
+  const [browseFilter, setBrowseFilter] = useState("");
 
   const [menuFor, setMenuFor] = useState<SeasonalShow | null>(null);
+  const [menuErr, setMenuErr] = useState("");
 
   async function loadFollowed() {
     try {
       const rs = await api<SeasonalShow[]>("/seasonal/followed");
       setFollowed(rs);
       setFollowedErr("");
+      onFollowedChange?.(rs);
     } catch (e) {
       setFollowedErr((e as Error).message);
     }
   }
+
+  // Someone else changed the schedule (App.tsx's "Add to schedule").
+  useEffect(() => {
+    if (reloadKey) loadFollowed();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reloadKey]);
 
   // Followed list loads immediately (it's the default view); the current
   // season is fetched alongside it so "Follow more" has somewhere to
@@ -142,6 +166,24 @@ export default function SeasonalCalendar({ onSearch, selectedId }: SeasonalCalen
     onSearch({ id: show.id, title: show.title });
   }
 
+  // Context menu "Show on": place a followed show on a weekday by hand, or
+  // (day = null) back on its airing day. Stored server-side, so the
+  // 6-hourly schedule refresh doesn't undo it.
+  async function placeOnDay(show: SeasonalShow, day: number | null) {
+    setMenuErr("");
+    try {
+      await api(`/seasonal/follow/${encodeURIComponent(show.id)}/day`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ day }),
+      });
+      setMenuFor(null);
+      loadFollowed();
+    } catch (e) {
+      setMenuErr((e as Error).message);
+    }
+  }
+
   // -- cover interactions ---------------------------------------------------
   // Left click / tap selects (same as "Search" in the menu); right click --
   // or a long press on touch -- opens the context menu.
@@ -155,6 +197,11 @@ export default function SeasonalCalendar({ onSearch, selectedId }: SeasonalCalen
   // click after a long press, and the user's next real tap must still work.
   const suppressClicksUntil = useRef(0);
   const clickSuppressed = () => Date.now() < suppressClicksUntil.current;
+
+  function openMenu(s: SeasonalShow) {
+    setMenuErr("");
+    setMenuFor(s);
+  }
 
   function cancelPress() {
     if (pressTimer.current !== null) window.clearTimeout(pressTimer.current);
@@ -175,7 +222,7 @@ export default function SeasonalCalendar({ onSearch, selectedId }: SeasonalCalen
         // click guard as the timer path below.
         if (pressStart.current) suppressClicksUntil.current = Date.now() + 700;
         cancelPress();
-        setMenuFor(s);
+        openMenu(s);
       },
       onPointerDown: (e: PointerEvent) => {
         if (e.pointerType !== "touch") return;
@@ -183,7 +230,7 @@ export default function SeasonalCalendar({ onSearch, selectedId }: SeasonalCalen
         pressTimer.current = window.setTimeout(() => {
           pressTimer.current = null;
           suppressClicksUntil.current = Date.now() + 700;
-          setMenuFor(s);
+          openMenu(s);
         }, LONG_PRESS_MS);
       },
       onPointerMove: (e: PointerEvent) => {
@@ -289,12 +336,26 @@ export default function SeasonalCalendar({ onSearch, selectedId }: SeasonalCalen
           </div>
           {browseErr && <div className="err">{browseErr}</div>}
           {browsing && <div className="muted">loading…</div>}
+          {!browsing && browsed.length > 0 && (
+            <input
+              type="text"
+              className="seasonal-filter"
+              placeholder={`filter ${browsed.length} shows…`}
+              value={browseFilter}
+              onChange={(e) => setBrowseFilter(e.target.value)}
+            />
+          )}
           {!browsing && (
             <div className="seasonal-browse-grid">
-              {browsed.map((s) => (
+              {browsed.filter((s) => matchesFilter(s.title, browseFilter)).map((s) => (
                 <div className="seasonal-browse-item" key={s.id}>
                   {s.cover ? <img src={s.cover} alt="" /> : <div className="seasonal-cover-blank" />}
                   <span className="seasonal-title">{s.title}</span>
+                  {s.continuing && (
+                    <span className="seasonal-tag" title="Started in an earlier season, still airing">
+                      continuing
+                    </span>
+                  )}
                   <button className={s.followed ? "on" : ""} onClick={() => (s.followed ? unfollow(s) : follow(s))}>
                     {s.followed ? "Following ✓" : "+ Follow"}
                   </button>
@@ -312,6 +373,31 @@ export default function SeasonalCalendar({ onSearch, selectedId }: SeasonalCalen
             <button className="seasonal-menu-item" onClick={() => pickSearch(menuFor)}>
               Search
             </button>
+            <div className="seasonal-menu-days">
+              <div className="seasonal-menu-days-label">Show on</div>
+              <div className="seasonal-menu-days-row">
+                {DAY_LABELS.map((label, i) => (
+                  <button
+                    key={label}
+                    className={"day-chip" + (menuFor.day_of_week === i ? " on" : "")}
+                    aria-pressed={menuFor.day_of_week === i}
+                    onClick={() => placeOnDay(menuFor, i)}
+                  >
+                    {label}
+                  </button>
+                ))}
+                <button
+                  className={"day-chip auto" + (!menuFor.day_manual ? " on" : "")}
+                  aria-pressed={!menuFor.day_manual}
+                  title="Back to the day it airs"
+                  onClick={() => placeOnDay(menuFor, null)}
+                >
+                  Auto
+                  {menuFor.auto_day_of_week != null ? ` (${DAY_LABELS[menuFor.auto_day_of_week]})` : ""}
+                </button>
+              </div>
+              {menuErr && <div className="err">{menuErr}</div>}
+            </div>
             <button className="seasonal-menu-item" onClick={() => unfollow(menuFor)}>
               Remove
             </button>

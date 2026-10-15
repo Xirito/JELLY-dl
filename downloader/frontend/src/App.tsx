@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import type {
-  DownloaderInfo, FormatOption, MediaInterface, Mode, SeasonalSearchRequest, SeasonPlacement,
+  DownloaderInfo, FormatOption, MediaInterface, Mode, ScheduleControls, SeasonalSearchRequest,
+  SeasonalShow, SeasonPlacement,
 } from "./types";
 import { useJobPolling } from "./hooks/useJobPolling";
 import BackendSelect from "./components/BackendSelect";
@@ -93,7 +94,37 @@ export default function App() {
   // lookup the user never asked for just by switching backends afterward.
   const clearSeasonalRequest = useCallback(() => setSeasonalRequest(null), []);
 
+  // "Add to schedule" from the search panels. The calendar owns the
+  // followed list and reports every load of it here (so the panels can show
+  // "In schedule ✓"); scheduleReload tells it to reload after an add.
+  const [followedShows, setFollowedShows] = useState<SeasonalShow[]>([]);
+  const [scheduleReload, setScheduleReload] = useState(0);
+  const addToSchedule = useCallback(
+    async (id: string | null, title: string): Promise<SeasonalShow | null> => {
+      try {
+        const show = await api<SeasonalShow>("/seasonal/follow-anime", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id, title }),
+        });
+        setMsg(`added “${show.title}” to the schedule`);
+        setScheduleReload((n) => n + 1);
+        return show;
+      } catch (e) {
+        setMsg((e as Error).message, true);
+        return null;
+      }
+    },
+    [setMsg]
+  );
+
   const mediaTokens = useMemo(() => interfaces.map((i) => i.token), [interfaces]);
+
+  const scheduleOn = ANIME_BACKEND_IDS.includes(downloaderId);
+  const schedule = useMemo<ScheduleControls | null>(
+    () => (scheduleOn ? { followed: followedShows, add: addToSchedule } : null),
+    [scheduleOn, followedShows, addToSchedule]
+  );
 
   const caps = useMemo(
     () => downloaders.find((d) => d.id === downloaderId)?.capabilities ?? null,
@@ -359,8 +390,13 @@ export default function App() {
           <ArrowVideo showControls={false} />
         )}
       </div>
-      {ANIME_BACKEND_IDS.includes(downloaderId) && (
-        <SeasonalCalendar onSearch={handleSeasonalSearch} selectedId={selectedSeasonalId} />
+      {scheduleOn && (
+        <SeasonalCalendar
+          onSearch={handleSeasonalSearch}
+          selectedId={selectedSeasonalId}
+          reloadKey={scheduleReload}
+          onFollowedChange={setFollowedShows}
+        />
       )}
 
       <div className="card" ref={pickerCardRef}>
@@ -375,6 +411,7 @@ export default function App() {
             setMsg={setMsg}
             seasonalRequest={seasonalRequest}
             onSeasonalRequestHandled={clearSeasonalRequest}
+            schedule={schedule}
           />
         ) : (
           <SearchPanel
@@ -394,6 +431,7 @@ export default function App() {
             refreshJobs={refreshJobs}
             seasonalRequest={seasonalRequest}
             onSeasonalRequestHandled={clearSeasonalRequest}
+            schedule={schedule}
           />
         )}
       </div>

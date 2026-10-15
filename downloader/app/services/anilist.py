@@ -126,11 +126,15 @@ query ($id: Int) {
 _SEASON_QUERY = """
 query ($season: MediaSeason!, $seasonYear: Int!, $page: Int, $perPage: Int) {
   Page(page: $page, perPage: $perPage) {
+    pageInfo { hasNextPage }
     media(
       season: $season, seasonYear: $seasonYear, type: ANIME,
-      format_in: [TV, TV_SHORT], sort: POPULARITY_DESC
+      format_in: [TV, TV_SHORT, ONA], sort: POPULARITY_DESC
     ) {
       id
+      format
+      season
+      seasonYear
       title {
         romaji
         english
@@ -146,6 +150,99 @@ query ($season: MediaSeason!, $seasonYear: Int!, $page: Int, $perPage: Int) {
         episode
       }
     }
+  }
+}
+"""
+
+# Everything airing right now, whatever season it started in -- AniList
+# files a show under its START season, so a two-cour show that began last
+# season (or a long-runner like One Piece) is airing every week yet never
+# appears in this season's _SEASON_QUERY results. Only merged in when
+# browsing the current season (services/seasonal.py).
+_AIRING_QUERY = """
+query ($page: Int, $perPage: Int) {
+  Page(page: $page, perPage: $perPage) {
+    pageInfo { hasNextPage }
+    media(
+      status: RELEASING, type: ANIME,
+      format_in: [TV, TV_SHORT, ONA], sort: POPULARITY_DESC
+    ) {
+      id
+      format
+      season
+      seasonYear
+      title {
+        romaji
+        english
+        native
+      }
+      coverImage {
+        extraLarge
+        large
+        medium
+      }
+      nextAiringEpisode {
+        airingAt
+        episode
+      }
+    }
+  }
+}
+"""
+
+# "Add to schedule" from a search result (services/seasonal.py's
+# follow_anime()): one show's schedule info, by id (nyaa picks) or by title
+# (ani-cli picks, which carry no AniList id). Two queries rather than one
+# with both arguments nullable, so neither relies on how AniList treats an
+# explicit null argument.
+_SCHEDULE_BY_ID_QUERY = """
+query ($id: Int) {
+  Media(id: $id, type: ANIME) {
+      id
+      format
+      season
+      seasonYear
+      title {
+        romaji
+        english
+        native
+      }
+      coverImage {
+        extraLarge
+        large
+        medium
+      }
+      nextAiringEpisode {
+        airingAt
+        episode
+      }
+    synonyms
+  }
+}
+"""
+
+_SCHEDULE_BY_SEARCH_QUERY = """
+query ($search: String) {
+  Media(search: $search, type: ANIME) {
+      id
+      format
+      season
+      seasonYear
+      title {
+        romaji
+        english
+        native
+      }
+      coverImage {
+        extraLarge
+        large
+        medium
+      }
+      nextAiringEpisode {
+        airingAt
+        episode
+      }
+    synonyms
   }
 }
 """
@@ -441,26 +538,80 @@ class SeasonalEntry:
     title: str
     cover: str | None = None
     next_airing_at: int | None = None  # Unix timestamp (UTC), or None
+    season: str | None = None          # the show's START season, e.g. "SUMMER"
+    season_year: int | None = None
+    synonyms: list[str] = field(default_factory=list)
 
 
-def seasonal_anime(season: str, year: int, per_page: int = 50) -> list[SeasonalEntry]:
-    """One page (default 50, AniList's own per-page ceiling) of a season's
-    anime, most popular first. `season` is case-insensitive
+# AniList caps a page at 50. A season runs ~100-200 TV/ONA entries and
+# "airing now" ~150, so a few pages covers everything without hammering the
+# API (and services/seasonal.py caches the result).
+_MAX_PAGES = 6
+
+
+def _entry(m: dict) -> SeasonalEntry | None:
+    if not isinstance(m, dict) or m.get("id") is None:
+        return None
+    title = _best_title(m.get("title") or {})
+    if not title:
+        return None
+    cover_obj = m.get("coverImage") or {}
+    cover = cover_obj.get("extraLarge") or cover_obj.get("large") or cover_obj.get("medium")
+    nae = m.get("nextAiringEpisode")
+    airing_at = nae.get("airingAt") if isinstance(nae, dict) else None
+    t = m.get("title") or {}
+    syns = [x for x in (t.get("romaji"), t.get("english"), *(m.get("synonyms") or [])) if x and x != title]
+    return SeasonalEntry(
+        id=str(m["id"]), title=title, cover=cover, next_airing_at=airing_at,
+        season=m.get("season"), season_year=m.get("seasonYear"), synonyms=syns,
+    )
+
+
+def _all_pages(query: str, variables: dict, max_pages: int) -> list[SeasonalEntry]:
+    out: list[SeasonalEntry] = []
+    seen: set[str] = set()
+    for page in range(1, max_pages + 1):
+        data = _post(query, {**variables, "page": page, "perPage": 50})
+        pg = data.get("Page") or {}
+        for m in pg.get("media") or []:
+            e = _entry(m)
+            if e and e.id not in seen:
+                seen.add(e.id)
+                out.append(e)
+        if not (pg.get("pageInfo") or {}).get("hasNextPage"):
+            break
+    return out
+
+
+def seasonal_anime(season: str, year: int, max_pages: int = _MAX_PAGES) -> list[SeasonalEntry]:
+    """Every TV/TV-short/ONA show that STARTED in this season, most popular
+    first -- all pages, not just the first 50 (which silently dropped the
+    less popular half of a busy season). `season` is case-insensitive
     ("winter"/"WINTER" both work -- AniList's MediaSeason enum itself is
     uppercase, normalized here so callers don't have to remember that).
     """
-    data = _post(_SEASON_QUERY, {"season": season.upper(), "seasonYear": year, "page": 1, "perPage": per_page})
-    media_list = (data.get("Page") or {}).get("media") or []
-    out: list[SeasonalEntry] = []
-    for m in media_list:
-        if not isinstance(m, dict) or m.get("id") is None:
-            continue
-        title = _best_title(m.get("title") or {})
-        if not title:
-            continue
-        cover_obj = m.get("coverImage") or {}
-        cover = cover_obj.get("extraLarge") or cover_obj.get("large") or cover_obj.get("medium")
-        nae = m.get("nextAiringEpisode")
-        airing_at = nae.get("airingAt") if isinstance(nae, dict) else None
-        out.append(SeasonalEntry(id=str(m["id"]), title=title, cover=cover, next_airing_at=airing_at))
-    return out
+    return _all_pages(_SEASON_QUERY, {"season": season.upper(), "seasonYear": year}, max_pages)
+
+
+def airing_now(max_pages: int = _MAX_PAGES) -> list[SeasonalEntry]:
+    """Every TV/TV-short/ONA show currently airing, whatever season it
+    started in, most popular first."""
+    return _all_pages(_AIRING_QUERY, {}, max_pages)
+
+
+def schedule_info(media_id: int | None = None, search: str | None = None) -> SeasonalEntry | None:
+    """One show's schedule info by AniList id, or AniList's best match for
+    a title. None when AniList has nothing."""
+    if media_id is not None:
+        query, variables = _SCHEDULE_BY_ID_QUERY, {"id": int(media_id)}
+    elif search and search.strip():
+        query, variables = _SCHEDULE_BY_SEARCH_QUERY, {"search": search.strip()}
+    else:
+        return None
+    try:
+        data = _post(query, variables)
+    except AniListError as e:
+        if _is_not_found(e):
+            return None
+        raise
+    return _entry(data.get("Media") or {})

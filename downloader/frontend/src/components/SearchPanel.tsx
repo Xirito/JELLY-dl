@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { fmtDur } from "../format";
 import { waitForTerminal } from "../hooks/useJobPolling";
-import type { DownloadOptions, Mode, SearchResult, SeasonalSearchRequest } from "../types";
+import type { DownloadOptions, Mode, ScheduleControls, SearchResult, SeasonalSearchRequest } from "../types";
+import AddToScheduleButton from "./AddToScheduleButton";
 
 interface SearchPanelProps {
   downloaderId: string;
@@ -28,6 +29,9 @@ interface SearchPanelProps {
   // AnimeTorrentPanel's identical prop for why App.tsx needs this to clear
   // the request back to null once it's been handled.
   onSeasonalRequestHandled?: () => void;
+  // "Add to schedule" for the show currently opened (ani-cli's episode
+  // list) -- null for yt-dlp, which has no schedule.
+  schedule?: ScheduleControls | null;
 }
 
 // Some backends (ani-cli) return two-level results: a top-level pick is a
@@ -53,6 +57,7 @@ export default function SearchPanel({
   refreshJobs,
   seasonalRequest,
   onSeasonalRequestHandled,
+  schedule,
 }: SearchPanelProps) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -203,6 +208,17 @@ export default function SearchPanel({
               Search
             </button>
           </div>
+          {schedule && resultsAreLeaf && currentShowTitle && (
+            <div className="schedule-row">
+              <span className="schedule-row-title">{currentShowTitle}</span>
+              <AddToScheduleButton
+                key={currentShowTitle}
+                schedule={schedule}
+                id={null}
+                title={currentShowTitle}
+              />
+            </div>
+          )}
           {hasSearched && (
             <div id="results">
               {isLeaf && (

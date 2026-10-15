@@ -46,6 +46,7 @@ import sqlite3
 import threading
 import time
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import date, datetime
 
 from ..config import DOWNLOAD_ROOT
@@ -56,6 +57,10 @@ log = logging.getLogger(__name__)
 
 _DB_PATH = DOWNLOAD_ROOT / ".seasonal" / "seasonal.db"
 _STALE_AFTER_S = 6 * 3600  # re-check a followed show's schedule at most this often
+# A full season is now several AniList requests (all pages, plus everything
+# airing right now for the current season) -- cache it so flipping between
+# tabs/seasons and the stale-refresh below don't refetch it each time.
+_BROWSE_TTL_S = 30 * 60
 
 _SEASON_MONTHS = {
     1: "WINTER", 2: "WINTER", 3: "WINTER",
@@ -127,9 +132,16 @@ def _conn():
             con.execute("""
                 CREATE TABLE IF NOT EXISTS follows (
                     id TEXT PRIMARY KEY REFERENCES shows(id) ON DELETE CASCADE,
-                    followed_at INTEGER NOT NULL
+                    followed_at INTEGER NOT NULL,
+                    day_override INTEGER
                 )
             """)
+            # day_override: the weekday the user placed a followed show on
+            # (set_day()). Lives on `follows`, not `shows`, so the schedule
+            # refresh -- which rewrites `shows` rows from AniList -- never
+            # undoes it. Added after the first release, hence the migration.
+            if "day_override" not in {r[1] for r in con.execute("PRAGMA table_info(follows)")}:
+                con.execute("ALTER TABLE follows ADD COLUMN day_override INTEGER")
             yield con
             con.commit()
         finally:
@@ -148,38 +160,80 @@ def _upsert_show(con: sqlite3.Connection, show_id: str, title: str, cover: str |
     )
 
 
-def _fetch_season(season: str, year: int) -> list[tuple[str, str, str | None, int | None]]:
-    """(id, title, cover, day_of_week) tuples, id already namespaced. Tries
-    AniList first, falls back to MAL only if AniList raises AND
-    mal.is_configured() -- see module docstring for why this is a plain
-    try/except rather than nyaa_tor_plugin.py's sticky-primary pattern."""
+@dataclass
+class _Row:
+    id: str            # namespaced, "anilist:123" / "mal:456"
+    title: str
+    cover: str | None
+    day: int | None
+    continuing: bool = False
+
+
+def _fetch_season(season: str, year: int) -> list[_Row]:
+    """Every show for the browse view, id already namespaced. Tries AniList
+    first, falls back to MAL only if AniList raises AND mal.is_configured()
+    -- see module docstring for why this is a plain try/except rather than
+    nyaa_tor_plugin.py's sticky-primary pattern.
+
+    For the current season, shows that started earlier but are still airing
+    are merged in after this season's own (continuing=True): AniList files
+    a show under its start season only, so without this a second cour or a
+    long-runner is simply missing. Best-effort -- if that extra lookup fails,
+    this season's own shows still come back."""
     try:
         entries = anilist.seasonal_anime(season, year)
-        return [
-            (f"anilist:{e.id}", e.title, e.cover, _weekday_from_airing_at(e.next_airing_at))
-            for e in entries
-        ]
     except Exception as e1:
         log.warning("AniList seasonal lookup failed (%s %d): %s", season, year, e1)
         if not mal.is_configured():
             raise SeasonalError(f"AniList seasonal lookup failed: {e1}") from e1
         try:
             entries = mal.seasonal_anime(season, year)
-            return [(f"mal:{e.id}", e.title, e.cover, e.day_of_week) for e in entries]
         except Exception as e2:
             raise SeasonalError(f"AniList seasonal lookup failed ({e1}); MAL fallback also failed: {e2}") from e2
+        return [_Row(f"mal:{e.id}", e.title, e.cover, e.day_of_week) for e in entries]
+
+    rows = [_Row(f"anilist:{e.id}", e.title, e.cover, _weekday_from_airing_at(e.next_airing_at)) for e in entries]
+    if (season, year) == current_season():
+        have = {r.id for r in rows}
+        try:
+            for e in anilist.airing_now():
+                rid = f"anilist:{e.id}"
+                if rid not in have:
+                    have.add(rid)
+                    rows.append(_Row(rid, e.title, e.cover, _weekday_from_airing_at(e.next_airing_at), True))
+        except Exception as e:
+            log.warning("AniList airing-now lookup failed; showing only shows that started this season: %s", e)
+    return rows
+
+
+_browse_lock = threading.Lock()
+_browse_cache: dict[tuple[str, int], tuple[float, list[_Row]]] = {}
 
 
 def browse_season(season: str, year: int) -> list[SeasonalShow]:
     season = season.upper()
-    rows = _fetch_season(season, year)
+    key = (season, year)
+    with _browse_lock:
+        hit = _browse_cache.get(key)
+    fresh = not (hit and time.time() < hit[0])
+    if fresh:
+        rows = _fetch_season(season, year)
+        with _browse_lock:
+            _browse_cache[key] = (time.time() + _BROWSE_TTL_S, rows)
+    else:
+        rows = hit[1]
     now = int(time.time())
     with _conn() as con:
         followed_ids = {r[0] for r in con.execute("SELECT id FROM follows")}
-        for show_id, title, cover, dow in rows:
-            _upsert_show(con, show_id, title, cover, dow, season, year, now)
+        if fresh:
+            # Continuing shows are stored under the season they were browsed
+            # in, so the stale-refresh re-reads them from this same (cached)
+            # listing instead of fetching their years-old start season.
+            for r in rows:
+                _upsert_show(con, r.id, r.title, r.cover, r.day, season, year, now)
     return [
-        SeasonalShow(id=r[0], title=r[1], cover=r[2], day_of_week=r[3], followed=r[0] in followed_ids)
+        SeasonalShow(id=r.id, title=r.title, cover=r.cover, day_of_week=r.day,
+                     followed=r.id in followed_ids, continuing=r.continuing)
         for r in rows
     ]
 
@@ -194,6 +248,52 @@ def follow(show_id: str, title: str, cover: str | None, day_of_week: int | None,
 def unfollow(show_id: str) -> None:
     with _conn() as con:
         con.execute("DELETE FROM follows WHERE id = ?", (show_id,))
+
+
+def follow_anime(anime_id: str | None, title: str) -> SeasonalShow:
+    """"Add to schedule" from a search result: look the show up (cover,
+    airing day, season) and follow it. `anime_id` is a nyaa pick's
+    "anilist:123"/"mal:456"; without one (ani-cli picks) the title goes to
+    AniList's own best-match search -- the returned show says what was
+    actually added, so a wrong match is visible (and removable) right away.
+    Raises SeasonalError when nothing can be found or looked up."""
+    source, _, raw = (anime_id or "").partition(":")
+    try:
+        if source == "mal" and raw.isdigit():
+            e = mal.schedule_info(int(raw))
+            show = (f"mal:{e.id}", e.title, e.cover, e.day_of_week, e.season, e.season_year) if e else None
+        else:
+            if source == "anilist" and raw.isdigit():
+                e = anilist.schedule_info(media_id=int(raw))
+            else:
+                e = anilist.schedule_info(search=title)
+            show = (f"anilist:{e.id}", e.title, e.cover, _weekday_from_airing_at(e.next_airing_at),
+                    e.season, e.season_year) if e else None
+    except Exception as ex:
+        raise SeasonalError(f"couldn't look up {title!r}: {ex}") from ex
+    if show is None:
+        raise SeasonalError(f"couldn't find {title!r} on AniList/MyAnimeList")
+    show_id, show_title, cover, day, start_season, start_year = show
+    # Same storage rule as browse_season(): something airing now is kept
+    # under the current season (its refresh then reads the cached
+    # current-season listing, which includes everything airing); anything
+    # else under its own start season.
+    cur_season, cur_year = current_season()
+    if day is not None or not (start_season and start_year):
+        start_season, start_year = cur_season, cur_year
+    follow(show_id, show_title, cover, day, start_season, start_year)
+    return SeasonalShow(id=show_id, title=show_title, cover=cover, day_of_week=day, followed=True)
+
+
+def set_day(show_id: str, day: int | None) -> None:
+    """Place a followed show on a weekday (0=Monday..6=Sunday), or None to
+    go back to its airing day. KeyError if it isn't followed."""
+    if day is not None and not 0 <= day <= 6:
+        raise ValueError("day must be 0 (Monday) .. 6 (Sunday)")
+    with _conn() as con:
+        cur = con.execute("UPDATE follows SET day_override = ? WHERE id = ?", (day, show_id))
+        if cur.rowcount == 0:
+            raise KeyError(show_id)
 
 
 def _refresh_stale(rows: list[sqlite3.Row], now: int) -> None:
@@ -217,7 +317,7 @@ def _followed_rows() -> list[sqlite3.Row]:
     with _conn() as con:
         con.row_factory = sqlite3.Row
         return con.execute(
-            """SELECT shows.* FROM shows
+            """SELECT shows.*, follows.day_override FROM shows
                JOIN follows ON follows.id = shows.id
                ORDER BY follows.followed_at ASC"""
         ).fetchall()
@@ -235,6 +335,11 @@ def list_followed() -> list[SeasonalShow]:
         _refresh_stale(rows, now)
         rows = _followed_rows()
     return [
-        SeasonalShow(id=r["id"], title=r["title"], cover=r["cover"], day_of_week=r["day_of_week"], followed=True)
+        SeasonalShow(
+            id=r["id"], title=r["title"], cover=r["cover"], followed=True,
+            day_of_week=r["day_override"] if r["day_override"] is not None else r["day_of_week"],
+            day_manual=r["day_override"] is not None,
+            auto_day_of_week=r["day_of_week"],
+        )
         for r in rows
     ]

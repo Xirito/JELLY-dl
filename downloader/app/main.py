@@ -10,8 +10,8 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import MEDIA_SERVER_TARGETS
 from .models import (
-    AnimeDetails, AnimeMatch, DownloadRequest, DownloaderInfo, FollowShowRequest,
-    JobInfo, ProviderStatus, SeasonalShow, SeasonPlacement,
+    AnimeDetails, AnimeMatch, DownloadRequest, DownloaderInfo, FollowAnimeRequest, FollowShowRequest,
+    JobInfo, ProviderStatus, SeasonalShow, SeasonPlacement, SetDayRequest,
 )
 from .registry import build_default_registry
 from .services import season_resolver, seasonal
@@ -191,6 +191,28 @@ def seasonal_unfollow(show_id: str):
     # the colon fine (same as the existing /downloaders/{id}/anime/{anime_id}
     # route above, whose anime_id has the identical shape).
     seasonal.unfollow(show_id)
+    return {"ok": True}
+
+
+@app.post("/seasonal/follow-anime", response_model=SeasonalShow)
+def seasonal_follow_anime(body: FollowAnimeRequest):
+    # "Add to schedule" from a search result -- the server looks up cover +
+    # airing day itself (services/seasonal.py's follow_anime()) and answers
+    # with the show it actually added.
+    try:
+        return seasonal.follow_anime(body.id, body.title)
+    except seasonal.SeasonalError as e:
+        raise HTTPException(502, str(e))
+
+
+@app.put("/seasonal/follow/{show_id}/day")
+def seasonal_set_day(show_id: str, body: SetDayRequest):
+    # Context menu "Move to": place a followed show on a weekday, or
+    # day=null for its airing day again.
+    try:
+        seasonal.set_day(show_id, body.day)
+    except KeyError:
+        raise HTTPException(404, "not in the schedule")
     return {"ok": True}
 
 
